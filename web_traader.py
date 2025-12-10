@@ -306,12 +306,20 @@ def composite_class(score: float):
         return "composite-low"
 
 
-# ============ 计算单只股票 ============
+# ============ 计算单只股票（使用上一根完整K线） ============
 def compute_stock_metrics(symbol: str, cfg_key: str):
     cfg = BACKTEST_CONFIG[cfg_key]
     close, high, low, volume = fetch_yahoo_ohlcv(
         symbol, range_str=cfg["range"], interval=cfg["interval"]
     )
+
+    # ⚠️ 丢掉最后一根「可能还没走完」的K线
+    # 日线 = 昨日收盘；4H/1H = 最近完整周期
+    if len(close) > 81:
+        close = close[:-1]
+        high = high[:-1]
+        low = low[:-1]
+        volume = volume[:-1]
 
     macd_hist = macd_hist_np(close)
     rsi = rsi_np(close)
@@ -496,7 +504,8 @@ def decide_advice(prob: float, pf: float):
 
 # ============ 缓存 ============
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 9):
+def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 10):
+    # version 改成 10，强制刷新旧缓存
     return compute_stock_metrics(symbol, cfg_key=cfg_key)
 
 
@@ -668,7 +677,8 @@ else:
                 st.markdown(html, unsafe_allow_html=True)
 
 st.caption(
-    "数据来源：Yahoo Finance HTTP 接口，周期和回测区间基于上方选择（日线/4小时/1小时）。"
-    "未来7日/30日盈利概率基于历史同类信号的统计结果，括号内为平均盈利、平均亏损和盈亏比（Profit Factor）。"
-    "综合评分由 30日胜率与30日盈亏比共同计算，仅作个人量化研究，不构成投资建议。"
+    "所有指标和回测均基于“上一根完整K线”（日线=昨日收盘，4小时/1小时=上一完整周期），"
+    "不会使用盘中尚未走完的K线数据。"
+    "未来7日/30日盈利概率基于历史同类信号统计，括号为平均盈利、平均亏损和盈亏比（Profit Factor），"
+    "综合评分由30日胜率与30日盈亏比计算，仅作个人量化研究，不构成投资建议。"
 )
