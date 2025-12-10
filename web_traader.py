@@ -20,46 +20,110 @@ def analyze_stock(ticker_symbol):
         stock = yf.Ticker(ticker_symbol)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=HISTORY_YEARS * 365)
-        hist_data = stock.history(start=start_date, end=end_date, interval="1d", auto_adjust=True)
+        hist_data = stock.history(
+            start=start_date,
+            end=end_date,
+            interval="1d",
+            auto_adjust=True
+        )
 
+        # 数据太少直接丢弃
         if hist_data.empty or len(hist_data) < 40:
+            print(f"[INFO] {ticker_symbol}: history too short")
             return None
 
+        # -------- 价格变化 --------
         latest_price = hist_data['Close'].iloc[-1]
         previous_close = hist_data['Close'].iloc[-2]
         price_change_percent = ((latest_price - previous_close) / previous_close) * 100
 
+        # -------- 技术指标计算 --------
+        # 注意：这里如果 pandas_ta 没装好，会直接报错
         hist_data.ta.rsi(length=14, append=True)
         hist_data.ta.macd(fast=12, slow=26, signal=9, append=True)
         hist_data.ta.bbands(length=20, std=2, append=True)
         hist_data.ta.ema(length=20, append=True)
         hist_data.ta.obv(append=True)
-        
+
         latest = hist_data.iloc[-1]
 
-        rsi_status = 2 if latest.get('RSI_14', 50) < 40 else 1 if 40 <= latest.get('RSI_14', 50) < 50 else 0
-        macd_status = 2 if latest.get('MACD_12_26_9', 0) > latest.get('MACDs_12_26_9', -1) else 0
-        bb_status = 2 if latest['Close'] < latest.get('BBL_20_2.0', float('inf')) else 1 if latest.get('BBL_20_2.0', float('inf')) <= latest['Close'] < latest.get('BBM_20_2.0', float('inf')) else 0
-        ema_status = 2 if latest['Close'] > latest.get('EMA_20', float('inf')) else 0
-        obv_mean = hist_data['OBV'].rolling(window=5).mean().iloc[-1]
-        obv_status = 2 if latest.get('OBV', 0) > obv_mean else 0
+        # 安全地取指标，缺失时给默认值
+        rsi_val = latest.get('RSI_14', 50)
+        macd_val = latest.get('MACD_12_26_9', 0)
+        macds_val = latest.get('MACDs_12_26_9', 0)
+        bbl_val = latest.get('BBL_20_2.0', float('inf'))
+        bbm_val = latest.get('BBM_20_2.0', float('inf'))
+        ema_val = latest.get('EMA_20', latest['Close'])
+        obv_series = hist_data.get('OBV')
+
+        # -------- 各指标状态打分（0/1/2） --------
+        # RSI
+        if rsi_val < 40:
+            rsi_status = 2
+        elif 40 <= rsi_val < 50:
+            rsi_status = 1
+        else:
+            rsi_status = 0
+
+        # MACD
+        macd_status = 2 if macd_val > macds_val else 0
+
+        # 布林带
+        close = latest['Close']
+        if close < bbl_val:
+            bb_status = 2
+        elif bbl_val <= close < bbm_val:
+            bb_status = 1
+        else:
+            bb_status = 0
+
+        # EMA
+        ema_status = 2 if close > ema_val else 0
+
+        # OBV
+        if obv_series is not None and obv_series.notna().sum() >= 5:
+            obv_ma5 = obv_series.rolling(window=5).mean().iloc[-1]
+            obv_status = 2 if latest.get('OBV', 0) > obv_ma5 else 0
+        else:
+            obv_status = 0
+
+        # -------- 组合条件 + 历史统计 --------
+        # 用 get 防止 KeyError
+        rsi_series = hist_data.get('RSI_14')
+        macd_main = hist_data.get('MACD_12_26_9')
+        macd_sig = hist_data.get('MACDs_12_26_9')
+        bbl_series = hist_data.get('BBL_20_2.0')
+        ema_series = hist_data.get('EMA_20')
+        obv_series = hist_data.get('OBV')
+
+        # 没有这些列时，用 False 填充
+        def safe_cond(series, cond_fn):
+            if series is None:
+                return pd.Series(False, index=hist_data.index)
+            return cond_fn(series)
 
         conditions_df = pd.DataFrame({
-            'rsi_ok': hist_data['RSI_14'] < 40,
-            'macd_ok': hist_data['MACD_12_26_9'] > hist_data['MACDs_12_26_9'],
-            'bb_ok': hist_data['Close'] < hist_data['BBL_20_2.0'],
-            'ema_ok': hist_data['Close'] > hist_data['EMA_20'],
-            'obv_ok': hist_data['OBV'] > hist_data['OBV'].rolling(window=5).mean()
+            'rsi_ok': safe_cond(rsi_series, lambda s: s < 40),
+            'macd_ok': (macd_main > macd_sig) if (macd_main is not None and macd_sig is not None) 
+                        else pd.Series(False, index=hist_data.index),
+            'bb_ok': (hist_data['Close'] < bbl_series) if bbl_series is not None \
+                        else pd.Series(False, index=hist_data.index),
+            'ema_ok': (hist_data['Close'] > ema_series) if ema_series is not None \
+                        else pd.Series(False, index=hist_data.index),
+            'obv_ok': (obv_series > obv_series.rolling(window=5).mean()) if obv_series is not None \
+                        else pd.Series(False, index=hist_data.index),
         })
+
         conditions_met_count = conditions_df.sum(axis=1)
         buy_signals = (conditions_met_count >= MIN_CONDITIONS_MET)
-        
+
+        # -------- 未来收益统计 --------
         hist_data['future_7d_close'] = hist_data['Close'].shift(-7)
         hist_data['future_30d_close'] = hist_data['Close'].shift(-30)
-        
+
         signal_df = hist_data[buy_signals].dropna(subset=['future_30d_close'])
         signal_days = len(signal_df)
-        
+
         prob_7d, prob_30d = 0.0, 0.0
         if signal_days > 0:
             win_7d = (signal_df['future_7d_close'] > signal_df['Close']).sum()
@@ -68,13 +132,22 @@ def analyze_stock(ticker_symbol):
             prob_30d = (win_30d / signal_days) * 100
 
         return {
-            'ticker': ticker_symbol, 'price': latest_price,
-            'change_pct': price_change_percent, 'rsi': rsi_status, 'macd': macd_status,
-            'bbands': bb_status, 'ema': ema_status, 'obv': obv_status,
-            'prob_7d': prob_7d, 'prob_30d': prob_30d,
+            'ticker': ticker_symbol,
+            'price': float(latest_price),
+            'change_pct': float(price_change_percent),
+            'rsi': int(rsi_status),
+            'macd': int(macd_status),
+            'bbands': int(bb_status),
+            'ema': int(ema_status),
+            'obv': int(obv_status),
+            'prob_7d': float(prob_7d),
+            'prob_30d': float(prob_30d),
         }
-    except Exception:
+
+    except Exception as e:
+        print(f"[ERROR] analyze_stock({ticker_symbol}): {e}")
         return None
+
 
 # --- Dash 应用定义 ---
 app = dash.Dash(__name__, external_stylesheets=['https://codepen.io/chriddyp/pen/bWLwgP.css'])
