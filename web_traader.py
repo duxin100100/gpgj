@@ -54,7 +54,6 @@ st.markdown(
 st.title("📈 量化技术信号面板")
 
 # ============ 通过 Yahoo HTTP API 获取数据 ============
-
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3y&interval=1d"
 
 
@@ -90,8 +89,7 @@ def fetch_yahoo_ohlcv(symbol: str):
     return close, high, low, volume
 
 
-# ============ numpy 实现的技术指标 ============
-
+# ============ numpy 技术指标 ============
 def ema_np(x: np.ndarray, span: int) -> np.ndarray:
     alpha = 2 / (span + 1)
     ema = np.zeros_like(x, dtype=float)
@@ -160,16 +158,19 @@ def obv_np(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
 
 
 # ============ 回测相关函数 ============
-
 def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_score: int = 3):
-    """返回：胜率、平均收益、信号次数、最大回撤、盈亏比"""
+    """
+    返回：
+      胜率、平均收益、信号次数、最大回撤、盈亏比、盈利次数
+    """
     idx = np.where(score[:-days] >= min_score)[0]
     if len(idx) == 0:
-        return 0.0, 0.0, 0, 0.0, 0.0
+        return 0.0, 0.0, 0, 0.0, 0.0, 0
 
     rets = close[idx + days] / close[idx] - 1.0
     signals = len(rets)
     win_mask = rets > 0
+    wins = int(win_mask.sum())
     win_rate = float(win_mask.mean())
     avg_ret = float(rets.mean())
 
@@ -179,7 +180,7 @@ def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_sco
     dd = equity / peak - 1
     max_dd = float(dd.min())  # 负数
 
-    # 盈亏比：盈利总和 / 亏损绝对值总和
+    # 盈亏比：盈利总和 / 亏损绝对值总和（后面不展示，但统计保留）
     profit = rets[rets > 0].sum()
     loss = -rets[rets < 0].sum()
     if loss > 0:
@@ -187,30 +188,10 @@ def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_sco
     else:
         pf = 0.0
 
-    return win_rate, avg_ret, signals, max_dd, pf
-
-
-def choose_best_holding(close: np.ndarray, score: np.ndarray, horizons=None, min_score: int = 3, min_signals: int = 15):
-    """在多个持有周期里选平均收益最高的周期"""
-    if horizons is None:
-        horizons = [3, 5, 7, 10, 15, 20]
-
-    best_day = 0
-    best_ret = -1e9
-    for d in horizons:
-        idx = np.where(score[:-d] >= min_score)[0]
-        if len(idx) < min_signals:
-            continue
-        rets = close[idx + d] / close[idx] - 1.0
-        avg_ret = float(rets.mean())
-        if avg_ret > best_ret:
-            best_ret = avg_ret
-            best_day = d
-    return best_day
+    return win_rate, avg_ret, signals, max_dd, pf, wins
 
 
 # ============ 计算单只股票的指标 + 回测 ============
-
 def compute_stock_metrics(symbol: str):
     close, high, low, volume = fetch_yahoo_ohlcv(symbol)
 
@@ -231,11 +212,9 @@ def compute_stock_metrics(symbol: str):
 
     score = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
 
-    # 回测统计（用 7 天为主）
-    prob7, avg7, signals7, max_dd7, pf7 = backtest_with_stats(close, score, days=7)
-    prob30, avg30, _, _, _ = backtest_with_stats(close, score, days=30)
-
-    best_holding = choose_best_holding(close, score)
+    # 回测统计
+    prob7, avg7, signals7, max_dd7, pf7, wins7 = backtest_with_stats(close, score, days=7)
+    prob30, avg30, signals30, _, _, wins30 = backtest_with_stats(close, score, days=30)
 
     last_close = close[-1]
     prev_close = close[-2] if len(close) >= 2 else close[-1]
@@ -289,9 +268,10 @@ def compute_stock_metrics(symbol: str):
         "avg7": float(avg7),
         "avg30": float(avg30),
         "signals7": int(signals7),
+        "wins7": int(wins7),
+        "signals30": int(signals30),
+        "wins30": int(wins30),
         "max_dd7": float(max_dd7),
-        "pf7": float(pf7),
-        "best_holding": int(best_holding),
         "indicators": indicators,
         "score": int(score[last_idx]),
     }
@@ -305,14 +285,13 @@ def prob_class(p):
     return "prob-bad"
 
 
-# 用 version 参数强制区分新旧缓存
+# 用 version=3 强制刷新缓存
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, version: int = 2):
+def get_stock_metrics_cached(symbol: str, version: int = 3):
     return compute_stock_metrics(symbol)
 
 
 # ============ Streamlit 交互层：平铺 QQQ + 七姐妹 ============
-
 default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
@@ -321,7 +300,14 @@ if "watchlist" not in st.session_state:
 top_c1, top_c2, top_c3 = st.columns([2.8, 1.2, 1.3])
 
 with top_c1:
-    new_symbol = st.text_input("输入股票代码添加到自选（例：TSLA）", value="", max_chars=10)
+    # 去掉上方 label，只保留 placeholder
+    new_symbol = st.text_input(
+        "",
+        value="",
+        max_chars=10,
+        placeholder="输入股票代码添加到自选（例：TSLA）",
+        label_visibility="collapsed",
+    )
 with top_c2:
     add_btn = st.button("➕ 添加/置顶")
 with top_c3:
@@ -342,7 +328,6 @@ rows = []
 for sym in st.session_state.watchlist:
     try:
         with st.spinner(f"载入 {sym} ..."):
-            # version=2 保证走新的缓存空间
             metrics = get_stock_metrics_cached(sym)
         rows.append(metrics)
     except Exception as e:
@@ -383,26 +368,18 @@ else:
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
-                # 新增：回测统计信息（用 get 防止 KeyError）
+                # 统计字段
                 signals7 = row.get("signals7", 0)
+                wins7 = row.get("wins7", 0)
+                signals30 = row.get("signals30", 0)
+                wins30 = row.get("wins30", 0)
                 avg7 = row.get("avg7", 0.0) * 100
                 max_dd7 = row.get("max_dd7", 0.0) * 100
-                pf7 = row.get("pf7", 0.0)
-                best_hold = row.get("best_holding", 0)
 
                 stats_lines = []
-                stats_lines.append(f"7日信号次数：{signals7} 次")
+                stats_lines.append(f"7日信号次数：{signals7} 次，盈利：{wins7} 次")
                 stats_lines.append(f"7日平均收益：{avg7:+.2f}%")
                 stats_lines.append(f"策略最大回撤：{max_dd7:.2f}%")
-                if pf7 > 0:
-                    stats_lines.append(f"盈亏比：{pf7:.2f}")
-                else:
-                    stats_lines.append("盈亏比：—")
-                if best_hold > 0:
-                    stats_lines.append(f"推荐持有周期：{best_hold} 天")
-                else:
-                    stats_lines.append("推荐持有周期：样本不足")
-
                 stats_html = "<br>".join(stats_lines)
 
                 html = f"""
@@ -417,10 +394,12 @@ else:
                   </div>
                   <div style="border-bottom:1px dashed #262736;margin:6px 0 4px;"></div>
                   <div>
-                    <div><span class="label">未来7日盈利概率</span>
+                    <div>
+                      <span class="label">未来7日盈利概率（{signals7}/{wins7}）</span>
                       <span class="{prob7_class}">{prob7_text}</span>
                     </div>
-                    <div><span class="label">未来30日盈利概率</span>
+                    <div>
+                      <span class="label">未来30日盈利概率（{signals30}/{wins30}）</span>
                       <span class="{prob30_class}">{prob30_text}</span>
                     </div>
                   </div>
