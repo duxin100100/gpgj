@@ -44,40 +44,6 @@ st.markdown(
     .change-up { color:#4ade80; font-size:16px; }
     .change-down { color:#fb7185; font-size:16px; }
 
-    .composite-line{
-        margin-top:2px;
-        margin-bottom:4px;
-        display:flex;
-        align-items:center;
-        gap:8px;
-        font-size:14px;
-    }
-    .composite-label{
-        color:#9ca3af;
-        font-weight:600;
-    }
-    .composite-badge{
-        padding:1px 10px;
-        border-radius:999px;
-        font-size:15px;
-        font-weight:800;
-    }
-    .composite-high{
-        background:rgba(34,197,94,0.1);
-        color:#4ade80;
-        border:1px solid rgba(34,197,94,0.6);
-    }
-    .composite-mid{
-        background:rgba(250,204,21,0.08);
-        color:#facc15;
-        border:1px solid rgba(250,204,21,0.6);
-    }
-    .composite-low{
-        background:rgba(248,113,113,0.08);
-        color:#fb7185;
-        border:1px solid rgba(248,113,113,0.6);
-    }
-
     .dot { width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:6px; }
     .dot-bull { background:#4ade80; }
     .dot-neutral { background:#facc15; }
@@ -289,160 +255,6 @@ def backtest_with_stats(close: np.ndarray, score: np.ndarray, steps: int, min_sc
     return win_rate, avg_ret, signals, max_dd, pf, wins, avg_win, avg_loss
 
 
-# ============ 综合评分 ============
-def composite_score(prob30: float, pf30: float) -> float:
-    """综合评分 = 30日胜率 * 100 + 30日PF * 20，限制在 0~100"""
-    score = prob30 * 100 + pf30 * 20
-    return max(0.0, min(100.0, score))
-
-
-def composite_class(score: float):
-    """根据综合评分返回样式类名"""
-    if score >= 85:
-        return "composite-high"
-    elif score >= 70:
-        return "composite-mid"
-    else:
-        return "composite-low"
-
-
-# ============ 计算单只股票（使用上一根完整K线） ============
-def compute_stock_metrics(symbol: str, cfg_key: str):
-    cfg = BACKTEST_CONFIG[cfg_key]
-    close, high, low, volume = fetch_yahoo_ohlcv(
-        symbol, range_str=cfg["range"], interval=cfg["interval"]
-    )
-
-    # ⚠️ 丢掉最后一根「可能还没走完」的K线
-    # 日线 = 昨日收盘；4H/1H = 最近完整周期
-    if len(close) > 81:
-        close = close[:-1]
-        high = high[:-1]
-        low = low[:-1]
-        volume = volume[:-1]
-
-    macd_hist = macd_hist_np(close)
-    rsi = rsi_np(close)
-    atr = atr_np(high, low, close)
-    obv = obv_np(close, volume)
-
-    vol_ma20 = rolling_mean_np(volume, 20)
-    atr_ma20 = rolling_mean_np(atr, 20)
-    obv_ma20 = rolling_mean_np(obv, 20)
-
-    sig_macd = (macd_hist > 0).astype(int)
-    sig_vol = (volume > vol_ma20 * 1.1).astype(int)
-    sig_rsi = (rsi >= 60).astype(int)
-    sig_atr = (atr > atr_ma20 * 1.1).astype(int)
-    sig_obv = (obv > obv_ma20 * 1.05).astype(int)
-
-    score_arr = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
-
-    spd = cfg["steps_per_day"]
-    steps7 = 7 * spd
-    steps30 = 30 * spd
-
-    prob7, avg7, signals7, max_dd7, pf7, wins7, avg_win7, avg_loss7 = backtest_with_stats(
-        close, score_arr, steps=steps7
-    )
-    prob30, avg30, signals30, max_dd30, pf30, wins30, avg_win30, avg_loss30 = backtest_with_stats(
-        close, score_arr, steps=steps30
-    )
-
-    last_close = close[-1]
-    prev_close = close[-2] if len(close) >= 2 else close[-1]
-    change_pct = (last_close / prev_close - 1.0) * 100
-    last_idx = -1
-
-    indicators = []
-
-    # MACD
-    macd_val = float(macd_hist[last_idx])
-    macd_status = "bull" if macd_val > 0 else "bear"
-    indicators.append({
-        "name": "MACD 多头/空头",
-        "status": macd_status,
-        "desc": f"0.00 / {macd_val:.3f}"
-    })
-
-    # 成交量相对20日均量：阈值 1.10x
-    vol_ratio = float(volume[last_idx] / (vol_ma20[last_idx] + 1e-9))
-    vol_target = 1.10
-    if vol_ratio > vol_target:
-        vol_status = "bull"
-    elif vol_ratio < 0.90:
-        vol_status = "bear"
-    else:
-        vol_status = "neutral"
-    indicators.append({
-        "name": "成交量相对20日均量",
-        "status": vol_status,
-        "desc": f"{vol_target:.2f} / {vol_ratio:.2f}"
-    })
-
-    # RSI：阈值 60
-    rsi_val = float(rsi[last_idx])
-    if rsi_val >= 60:
-        rsi_status = "bull"
-    elif rsi_val <= 40:
-        rsi_status = "bear"
-    else:
-        rsi_status = "neutral"
-    indicators.append({
-        "name": "RSI 区间",
-        "status": rsi_status,
-        "desc": f"60.0 / {rsi_val:.1f}"
-    })
-
-    # ATR 波动率：阈值 1.10x
-    atr_ratio = float(atr[last_idx] / (atr_ma20[last_idx] + 1e-9))
-    if atr_ratio > 1.10:
-        atr_status = "bull"
-    elif atr_ratio < 0.90:
-        atr_status = "bear"
-    else:
-        atr_status = "neutral"
-    indicators.append({
-        "name": "ATR 波动率",
-        "status": atr_status,
-        "desc": f"1.10 / {atr_ratio:.2f}"
-    })
-
-    # OBV 资金趋势：阈值 1.05x
-    obv_ratio = float(obv[last_idx] / (obv_ma20[last_idx] + 1e-9))
-    if obv_ratio > 1.05:
-        obv_status = "bull"
-    elif obv_ratio < 0.95:
-        obv_status = "bear"
-    else:
-        obv_status = "neutral"
-    indicators.append({
-        "name": "OBV 资金趋势",
-        "status": obv_status,
-        "desc": f"1.05 / {obv_ratio:.2f}"
-    })
-
-    comp = composite_score(prob30, pf30)
-
-    return {
-        "symbol": symbol,
-        "price": float(last_close),
-        "change": float(change_pct),
-        "prob7": float(prob7),
-        "prob30": float(prob30),
-        "avg7": float(avg7),
-        "avg30": float(avg30),
-        "pf7": float(pf7),
-        "pf30": float(pf30),
-        "avg_win7": float(avg_win7),
-        "avg_loss7": float(avg_loss7),
-        "avg_win30": float(avg_win30),
-        "avg_loss30": float(avg_loss30),
-        "indicators": indicators,
-        "composite": float(comp),
-    }
-
-
 def prob_class(p):
     if p >= 0.65:
         return "prob-good"
@@ -502,10 +314,144 @@ def decide_advice(prob: float, pf: float):
     return label, intensity, color
 
 
+# ============ 计算单只股票（使用上一根完整K线） ============
+def compute_stock_metrics(symbol: str, cfg_key: str):
+    cfg = BACKTEST_CONFIG[cfg_key]
+    close, high, low, volume = fetch_yahoo_ohlcv(
+        symbol, range_str=cfg["range"], interval=cfg["interval"]
+    )
+
+    # 丢掉最后一根「可能还没走完」的K线
+    # 日线 = 昨日收盘；4H/1H = 最近完整周期
+    if len(close) > 81:
+        close = close[:-1]
+        high = high[:-1]
+        low = low[:-1]
+        volume = volume[:-1]
+
+    macd_hist = macd_hist_np(close)
+    rsi = rsi_np(close)
+    atr = atr_np(high, low, close)
+    obv = obv_np(close, volume)
+
+    vol_ma20 = rolling_mean_np(volume, 20)
+    atr_ma20 = rolling_mean_np(atr, 20)
+    obv_ma20 = rolling_mean_np(obv, 20)
+
+    sig_macd = (macd_hist > 0).astype(int)
+    sig_vol = (volume > vol_ma20 * 1.1).astype(int)
+    sig_rsi = (rsi >= 60).astype(int)
+    sig_atr = (atr > atr_ma20 * 1.1).astype(int)
+    sig_obv = (obv > obv_ma20 * 1.05).astype(int)
+
+    score_arr = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
+
+    spd = cfg["steps_per_day"]
+    steps7 = 7 * spd
+    steps30 = 30 * spd
+
+    prob7, avg7, signals7, max_dd7, pf7, wins7, avg_win7, avg_loss7 = backtest_with_stats(
+        close, score_arr, steps=steps7
+    )
+    prob30, avg30, signals30, max_dd30, pf30, wins30, avg_win30, avg_loss30 = backtest_with_stats(
+        close, score_arr, steps=steps30
+    )
+
+    last_close = close[-1]
+    prev_close = close[-2] if len(close) >= 2 else close[-1]
+    change_pct = (last_close / prev_close - 1.0) * 100
+    last_idx = -1
+
+    indicators = []
+
+    # MACD：只用红/绿点表示多头/空头，不显示数值
+    macd_val = float(macd_hist[last_idx])
+    macd_status = "bull" if macd_val > 0 else "bear"
+    indicators.append({
+        "name": "MACD 多头/空头",
+        "status": macd_status,
+        "desc": ""
+    })
+
+    # 成交量相对20日均量：阈值 1.10x
+    vol_ratio = float(volume[last_idx] / (vol_ma20[last_idx] + 1e-9))
+    vol_target = 1.10
+    if vol_ratio > vol_target:
+        vol_status = "bull"
+    elif vol_ratio < 0.90:
+        vol_status = "bear"
+    else:
+        vol_status = "neutral"
+    indicators.append({
+        "name": "成交量相对20日均量",
+        "status": vol_status,
+        "desc": f"{vol_target:.2f} / {vol_ratio:.2f}"
+    })
+
+    # RSI：阈值 60
+    rsi_val = float(rsi[last_idx])
+    if rsi_val >= 60:
+        rsi_status = "bull"
+    elif rsi_val <= 40:
+        rsi_status = "bear"
+    else:
+        rsi_status = "neutral"
+    indicators.append({
+        "name": "RSI 区间",
+        "status": rsi_status,
+        "desc": f"60.0 / {rsi_val:.1f}"
+    })
+
+    # ATR 波动率：阈值 1.10x
+    atr_ratio = float(atr[last_idx] / (atr_ma20[last_idx] + 1e-9))
+    if atr_ratio > 1.10:
+        atr_status = "bull"
+    elif atr_ratio < 0.90:
+        atr_status = "bear"
+    else:
+        atr_status = "neutral"
+    indicators.append({
+        "name": "ATR 波动率",
+        "status": atr_status,
+        "desc": f"1.10 / {atr_ratio:.2f}"
+    })
+
+    # OBV 资金趋势：阈值 1.05x
+    obv_ratio = float(obv[last_idx] / (obv_ma20[last_idx] + 1e-9))
+    if obv_ratio > 1.05:
+        obv_status = "bull"
+    elif obv_ratio < 0.95:
+        obv_status = "bear"
+    else:
+        obv_status = "neutral"
+    indicators.append({
+        "name": "OBV 资金趋势",
+        "status": obv_status,
+        "desc": f"1.05 / {obv_ratio:.2f}"
+    })
+
+    return {
+        "symbol": symbol,
+        "price": float(last_close),
+        "change": float(change_pct),
+        "prob7": float(prob7),
+        "prob30": float(prob30),
+        "avg7": float(avg7),
+        "avg30": float(avg30),
+        "pf7": float(pf7),
+        "pf30": float(pf30),
+        "avg_win7": float(avg_win7),
+        "avg_loss7": float(avg_loss7),
+        "avg_win30": float(avg_win30),
+        "avg_loss30": float(avg_loss30),
+        "indicators": indicators,
+    }
+
+
 # ============ 缓存 ============
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 10):
-    # version 改成 10，强制刷新旧缓存
+def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 11):
+    # version 改成 11，强制刷新缓存
     return compute_stock_metrics(symbol, cfg_key=cfg_key)
 
 
@@ -529,7 +475,7 @@ with top_c2:
 with top_c3:
     sort_by = st.selectbox(
         "",
-        ["默认顺序", "涨跌幅", "7日盈利概率", "30日盈利概率", "综合评分"],
+        ["默认顺序", "涨跌幅", "7日盈利概率", "30日盈利概率"],
         index=0,
         label_visibility="collapsed",
     )
@@ -563,8 +509,6 @@ elif sort_by == "7日盈利概率":
     rows.sort(key=lambda x: x["prob7"], reverse=True)
 elif sort_by == "30日盈利概率":
     rows.sort(key=lambda x: x["prob30"], reverse=True)
-elif sort_by == "综合评分":
-    rows.sort(key=lambda x: x["composite"], reverse=True)
 
 # ============ 卡片展示 ============
 if not rows:
@@ -590,16 +534,17 @@ else:
                 pf7 = row["pf7"]
                 pf30 = row["pf30"]
 
-                comp = row["composite"]
-                comp_class = composite_class(comp)
-
                 prob7_class = prob_class(row["prob7"])
                 prob30_class = prob_class(row["prob30"])
 
                 indicators_html = ""
                 for ind in row["indicators"]:
+                    if ind["desc"]:
+                        line = f"{ind['name']} ({ind['desc']})"
+                    else:
+                        line = ind["name"]
                     indicators_html += (
-                        f"<div class='label'>{ind['name']} ({ind['desc']})"
+                        f"<div class='label'>{line}"
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
@@ -638,11 +583,6 @@ else:
                     <span class="{change_class}">{change_str}</span>
                   </div>
 
-                  <div class="composite-line">
-                    <span class="composite-label">综合评分</span>
-                    <span class="composite-badge {comp_class}">{comp:.0f}</span>
-                  </div>
-
                   <div style="margin-top:4px;margin-bottom:6px">
                     {indicators_html}
                   </div>
@@ -651,12 +591,12 @@ else:
 
                   <div>
                     <div>
-                      <span class="label">未来7日盈利概率</span>
+                      <span class="label">7日盈利概率</span>
                       <span class="{prob7_class}"> {prob7_pct:.1f}%</span>
                       <span class="label"> (均盈 {avg_win7_pct:+.1f}%&nbsp;&nbsp;均亏 {avg_loss7_pct:+.1f}%&nbsp;&nbsp;盈亏 {pf7:.2f})</span>
                     </div>
                     <div>
-                      <span class="label">未来30日盈利概率</span>
+                      <span class="label">30日盈利概率</span>
                       <span class="{prob30_class}"> {prob30_pct:.1f}%</span>
                       <span class="label"> (均盈 {avg_win30_pct:+.1f}%&nbsp;&nbsp;均亏 {avg_loss30_pct:+.1f}%&nbsp;&nbsp;盈亏 {pf30:.2f})</span>
                     </div>
@@ -679,6 +619,6 @@ else:
 st.caption(
     "所有指标和回测均基于“上一根完整K线”（日线=昨日收盘，4小时/1小时=上一完整周期），"
     "不会使用盘中尚未走完的K线数据。"
-    "未来7日/30日盈利概率基于历史同类信号统计，括号为平均盈利、平均亏损和盈亏比（Profit Factor），"
-    "综合评分由30日胜率与30日盈亏比计算，仅作个人量化研究，不构成投资建议。"
+    "7日/30日盈利概率基于历史同类信号统计，括号为平均盈利、平均亏损和盈亏比（Profit Factor），"
+    "仅作个人量化研究，不构成投资建议。"
 )
