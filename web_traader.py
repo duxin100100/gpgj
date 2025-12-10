@@ -10,7 +10,7 @@ st.markdown(
     body { background:#05060a; }
     .main { background:#05060a; padding-top:10px !important; }
 
-    /* 🔥 标题缩小一倍 */
+    /* 标题缩小一倍 */
     h1 { font-size:26px !important; font-weight:700 !important; margin-bottom:6px !important; }
 
     .card {
@@ -52,7 +52,6 @@ st.markdown(
 )
 
 st.title("📈 量化技术信号面板")
-
 
 # ============ 通过 Yahoo HTTP API 获取数据 ============
 
@@ -162,6 +161,54 @@ def obv_np(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
 
 # ============ 计算单只股票的指标 + 回测 ============
 
+def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_score: int = 3):
+    """返回：胜率、平均收益、信号次数、最大回撤、盈亏比"""
+    idx = np.where(score[:-days] >= min_score)[0]
+    if len(idx) == 0:
+        return 0.0, 0.0, 0, 0.0, 0.0
+
+    rets = close[idx + days] / close[idx] - 1.0
+    signals = len(rets)
+    win_mask = rets > 0
+    win_rate = float(win_mask.mean())
+    avg_ret = float(rets.mean())
+
+    # 最大回撤（策略权益曲线）
+    equity = np.cumprod(1 + rets)
+    peak = np.maximum.accumulate(equity)
+    dd = equity / peak - 1
+    max_dd = float(dd.min())  # 负数
+
+    # 盈亏比：盈利总和 / 亏损绝对值总和
+    profit = rets[rets > 0].sum()
+    loss = -rets[rets < 0].sum()
+    if loss > 0:
+        pf = float(profit / loss)
+    else:
+        pf = 0.0
+
+    return win_rate, avg_ret, signals, max_dd, pf
+
+
+def choose_best_holding(close: np.ndarray, score: np.ndarray, horizons=None, min_score: int = 3, min_signals: int = 15):
+    """在多个持有周期里选平均收益最高的周期"""
+    if horizons is None:
+        horizons = [3, 5, 7, 10, 15, 20]
+
+    best_day = 0
+    best_ret = -1e9
+    for d in horizons:
+        idx = np.where(score[:-d] >= min_score)[0]
+        if len(idx) < min_signals:
+            continue
+        rets = close[idx + d] / close[idx] - 1.0
+        avg_ret = float(rets.mean())
+        if avg_ret > best_ret:
+            best_ret = avg_ret
+            best_day = d
+    return best_day
+
+
 def compute_stock_metrics(symbol: str):
     close, high, low, volume = fetch_yahoo_ohlcv(symbol)
 
@@ -182,30 +229,18 @@ def compute_stock_metrics(symbol: str):
 
     score = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
 
-    # 回测：未来 N 日盈利概率
-    def backtest(days: int, min_score: int = 3):
-        wins = 0
-        total = 0
-        rets = []
-        for i in range(len(close) - days):
-            if score[i] >= min_score:
-                total += 1
-                r = close[i + days] / close[i] - 1.0
-                rets.append(r)
-                if r > 0:
-                    wins += 1
-        if total == 0:
-            return 0.0, 0.0
-        return wins / total, float(np.mean(rets))
+    # 回测统计（用 7 天为主）
+    prob7, avg7, signals7, max_dd7, pf7 = backtest_with_stats(close, score, days=7)
+    prob30, avg30, _, _, _ = backtest_with_stats(close, score, days=30)
 
-    prob7, avg7 = backtest(7)
-    prob30, avg30 = backtest(30)
+    best_holding = choose_best_holding(close, score)
 
     last_close = close[-1]
     prev_close = close[-2] if len(close) >= 2 else close[-1]
     change_pct = (last_close / prev_close - 1.0) * 100
     last_idx = -1
 
+    # 指标状态用于 UI 点
     indicators = []
 
     macd_status = "bull" if macd_hist[last_idx] > 0 else "bear"
@@ -251,6 +286,10 @@ def compute_stock_metrics(symbol: str):
         "prob30": float(prob30),
         "avg7": float(avg7),
         "avg30": float(avg30),
+        "signals7": int(signals7),
+        "max_dd7": float(max_dd7),
+        "pf7": float(pf7),
+        "best_holding": int(best_holding),
         "indicators": indicators,
         "score": int(score[last_idx]),
     }
@@ -275,7 +314,7 @@ default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TS
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
 
-# 调整列宽：输入框 / 添加按钮 / 排序，对齐一行
+# 输入框 / 添加按钮 / 排序，对齐一行
 top_c1, top_c2, top_c3 = st.columns([2.8, 1.2, 1.3])
 
 with top_c1:
@@ -340,6 +379,28 @@ else:
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
+                # 新增：回测统计信息
+                signals7 = row["signals7"]
+                avg7 = row["avg7"] * 100
+                max_dd7 = row["max_dd7"] * 100
+                pf7 = row["pf7"]
+                best_hold = row["best_holding"]
+
+                stats_lines = []
+                stats_lines.append(f"7日信号次数：{signals7} 次")
+                stats_lines.append(f"7日平均收益：{avg7:+.2f}%")
+                stats_lines.append(f"策略最大回撤：{max_dd7:.2f}%")
+                if pf7 > 0:
+                    stats_lines.append(f"盈亏比：{pf7:.2f}")
+                else:
+                    stats_lines.append("盈亏比：—")
+                if best_hold > 0:
+                    stats_lines.append(f"推荐持有周期：{best_hold} 天")
+                else:
+                    stats_lines.append("推荐持有周期：样本不足")
+
+                stats_html = "<br>".join(stats_lines)
+
                 html = f"""
                 <div class="card">
                   <div class="symbol-line">
@@ -360,10 +421,11 @@ else:
                     </div>
                   </div>
                   <div class="score">
-                    信号强度：<span>{row['score']}/5</span>
+                    信号强度：<span>{row['score']}/5</span><br/>
+                    {stats_html}
                   </div>
                 </div>
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-st.caption("数据来源：Yahoo Finance HTTP 接口，回测区间约近3年，仅作个人量化研究，不构成投资建议。")
+st.caption("数据来源：Yahoo Finance HTTP 接口，回测区间约近3年，基于历史信号统计，仅作个人量化研究，不构成投资建议。")
