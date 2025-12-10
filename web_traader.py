@@ -1,6 +1,5 @@
 import streamlit as st
-import yfinance as yf
-import pandas as pd
+import requests
 import numpy as np
 
 # ============ 页面基础设置 ============
@@ -60,6 +59,43 @@ st.title("📈 量化技术信号面板")
 st.write("默认展示：QQQ + 美股七姐妹，可在上方添加/置顶其它股票。")
 
 
+# ============ 通过 Yahoo HTTP API 获取数据 ============
+
+YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3y&interval=1d"
+
+
+def fetch_yahoo_ohlcv(symbol: str):
+    url = YAHOO_URL.format(symbol=symbol)
+    resp = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=10,
+    )
+    data = resp.json()
+    if "chart" not in data or not data["chart"].get("result"):
+        raise ValueError("Yahoo 无返回数据")
+
+    result = data["chart"]["result"][0]
+    quote = result["indicators"]["quote"][0]
+
+    close = np.array(quote["close"], dtype="float64")
+    high = np.array(quote["high"], dtype="float64")
+    low = np.array(quote["low"], dtype="float64")
+    volume = np.array(quote["volume"], dtype="float64")
+
+    # 有些点为 None → 变成 nan；统一按 close 的有效位置做掩码
+    mask = ~np.isnan(close)
+    close = close[mask]
+    high = high[mask]
+    low = low[mask]
+    volume = volume[mask]
+
+    if len(close) < 80:
+        raise ValueError("可用历史数据太少")
+
+    return close, high, low, volume
+
+
 # ============ numpy 实现的技术指标 ============
 
 def ema_np(x: np.ndarray, span: int) -> np.ndarray:
@@ -116,9 +152,8 @@ def atr_np(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 1
 
 
 def rolling_mean_np(x: np.ndarray, window: int) -> np.ndarray:
-    """简单移动平均，用于 vol/atr/obv 均线"""
     if len(x) < window:
-        return np.full_like(x, np.nan, dtype=float)
+        return np.full_like(x, x.mean(), dtype=float)
     cumsum = np.cumsum(np.insert(x, 0, 0.0))
     ma = (cumsum[window:] - cumsum[:-window]) / window
     head = np.full(window - 1, ma[0])
@@ -130,33 +165,22 @@ def obv_np(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
     return np.cumsum(direction * volume)
 
 
-# ============ 计算单只股票的所有指标 + 回测 ============
+# ============ 计算单只股票的指标 + 回测 ============
 
 def compute_stock_metrics(symbol: str):
-    # 下载历史数据并转成 numpy，彻底避免 pandas 对齐问题
-    df = yf.download(symbol, period="3y", interval="1d")
-    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna().reset_index(drop=True)
-
-    if df.empty:
-        raise ValueError("无历史数据")
-
-    close = df["Close"].to_numpy(dtype=float)
-    high = df["High"].to_numpy(dtype=float)
-    low = df["Low"].to_numpy(dtype=float)
-    vol = df["Volume"].to_numpy(dtype=float)
+    close, high, low, volume = fetch_yahoo_ohlcv(symbol)
 
     macd_hist = macd_hist_np(close)
     rsi = rsi_np(close)
     atr = atr_np(high, low, close)
-    obv = obv_np(close, vol)
+    obv = obv_np(close, volume)
 
-    vol_ma20 = rolling_mean_np(vol, 20)
+    vol_ma20 = rolling_mean_np(volume, 20)
     atr_ma20 = rolling_mean_np(atr, 20)
     obv_ma20 = rolling_mean_np(obv, 20)
 
-    # 信号（多头 =1，其他=0）
     sig_macd = (macd_hist > 0).astype(int)
-    sig_vol = (vol > vol_ma20 * 1.1).astype(int)
+    sig_vol = (volume > vol_ma20 * 1.1).astype(int)
     sig_rsi = (rsi >= 60).astype(int)
     sig_atr = (atr > atr_ma20 * 1.1).astype(int)
     sig_obv = (obv > obv_ma20 * 1.05).astype(int)
@@ -182,21 +206,19 @@ def compute_stock_metrics(symbol: str):
     prob7, avg7 = backtest(7)
     prob30, avg30 = backtest(30)
 
-    # 当前最新值（最后一个元素）
     last_close = close[-1]
     prev_close = close[-2] if len(close) >= 2 else close[-1]
     change_pct = (last_close / prev_close - 1.0) * 100
     last_idx = -1
 
-    # 指标状态，用于 UI 打点
     indicators = []
 
     macd_status = "bull" if macd_hist[last_idx] > 0 else "bear"
     indicators.append({"name": "MACD 多头/空头", "status": macd_status})
 
-    if vol[last_idx] > vol_ma20[last_idx] * 1.1:
+    if volume[last_idx] > vol_ma20[last_idx] * 1.1:
         vol_status = "bull"
-    elif vol[last_idx] < vol_ma20[last_idx] * 0.9:
+    elif volume[last_idx] < vol_ma20[last_idx] * 0.9:
         vol_status = "bear"
     else:
         vol_status = "neutral"
@@ -348,4 +370,4 @@ else:
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-st.caption("数据来源：yfinance，回测区间约近3年，仅作个人量化研究，不构成投资建议。")
+st.caption("数据来源：Yahoo Finance HTTP 接口，回测区间约近3年，仅作个人量化研究，不构成投资建议。")
