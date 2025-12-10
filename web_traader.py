@@ -91,7 +91,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("📈 量化技术信号面板")
+st.title("回测信号面板")
 
 # ============ 回测配置（日线+4H+1H） ============
 BACKTEST_CONFIG = {
