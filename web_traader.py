@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, dash_table, Input, Output, State
+from dash import dcc, html, Input, Output, State
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
@@ -13,7 +13,7 @@ MIN_CONDITIONS_MET = 3
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# --- 核心分析函数 (V9 - 保持V8的英文内核) ---
+# --- 核心分析函数 (V10 - 保持V8的英文内核) ---
 def analyze_stock(ticker_symbol):
     """分析单个股票，返回包含纯英文键的字典。"""
     try:
@@ -80,7 +80,7 @@ def analyze_stock(ticker_symbol):
 app = dash.Dash(__name__, external_stylesheets=['https://codepen.io/chriddyp/pen/bWLwgP.css'])
 server = app.server
 
-# --- 界面布局 ---
+# --- 界面布局 (V10 - 手动构建HTML表格) ---
 app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', 'fontFamily': 'sans-serif'}, children=[
     html.H1("美股量化观察列表", style={'textAlign': 'center', 'color': '#4dabf7'}),
     html.Div(className='row', style={'marginBottom': '20px', 'display': 'flex', 'alignItems': 'center'}, children=[
@@ -94,29 +94,20 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
     ]),
     
     dcc.Loading(id="loading", type="default", children=[
-        dash_table.DataTable(
-            id='stock-table',
-            columns=[
-                {'name': '代码', 'id': 'ticker_display'}, {'name': '收盘价', 'id': 'price_display'}, {'name': '涨跌幅', 'id': 'change_pct_display'},
-                {'name': 'RSI', 'id': 'rsi_display'}, {'name': 'MACD', 'id': 'macd_display'}, {'name': '布林带', 'id': 'bbands_display'},
-                {'name': 'EMA', 'id': 'ema_display'}, {'name': 'OBV', 'id': 'obv_display'},
-                {'name': '7日概率', 'id': 'prob_7d_display'}, {'name': '30日概率', 'id': 'prob_30d_display'},
-            ],
-            style_header={'backgroundColor': '#333', 'fontWeight': 'bold'},
-            style_cell={'backgroundColor': '#1e1e1e', 'color': 'white', 'textAlign': 'center', 'border': '1px solid #333'},
-            style_data_conditional=[
-                {'if': {'column_id': 'change_pct_display', 'filter_query': '{change_pct_raw} > 0'}, 'color': '#4caf50'},
-                {'if': {'column_id': 'change_pct_display', 'filter_query': '{change_pct_raw} < 0'}, 'color': '#f44336'},
-                *[{'if': {'column_id': f'{c}_display', 'filter_query': f'{{{c}_raw} = 2'}, 'color': '#4caf50', 'fontWeight': 'bold'} for c in ['rsi', 'macd', 'bbands', 'ema', 'obv']],
-                *[{'if': {'column_id': f'{c}_display', 'filter_query': f'{{{c}_raw} = 1'}, 'color': '#ffeb3b'} for c in ['rsi', 'macd', 'bbands', 'ema', 'obv']],
-                *[{'if': {'column_id': f'{c}_display', 'filter_query': f'{{{c}_raw} = 0'}, 'color': '#f44336'} for c in ['rsi', 'macd', 'bbands', 'ema', 'obv']],
-            ]
-        )
+        html.Table(className='u-full-width', children=[
+            html.Thead(html.Tr([
+                html.Th('代码'), html.Th('收盘价'), html.Th('涨跌幅'),
+                html.Th('RSI'), html.Th('MACD'), html.Th('布林带'),
+                html.Th('EMA'), html.Th('OBV'),
+                html.Th('7日概率'), html.Th('30日概率'),
+            ], style={'backgroundColor': '#333', 'color': 'white'})),
+            html.Tbody(id='stock-table-body') # 表格内容将由Callback填充
+        ])
     ]),
     dcc.Store(id='stock-list-store', data=DEFAULT_STOCKS),
 ])
 
-# --- 交互逻辑 (Callback - V9 终极版) ---
+# --- 交互逻辑 (Callback - V10 终极版) ---
 @app.callback(Output('stock-list-store', 'data'), Input('add-btn', 'n_clicks'), [State('ticker-input', 'value'), State('stock-list-store', 'data')])
 def add_stock(n_clicks, ticker, stock_list):
     if n_clicks > 0 and ticker:
@@ -125,7 +116,7 @@ def add_stock(n_clicks, ticker, stock_list):
             return [ticker] + stock_list
     return stock_list
 
-@app.callback(Output('stock-table', 'data'), [Input('stock-list-store', 'data'), Input('sort-select', 'value')])
+@app.callback(Output('stock-table-body', 'children'), [Input('stock-list-store', 'data'), Input('sort-select', 'value')])
 def update_table(stock_list, sort_value):
     raw_data = [analyze_stock(ticker) for ticker in stock_list]
     valid_data = [d for d in raw_data if d is not None]
@@ -141,26 +132,33 @@ def update_table(stock_list, sort_value):
     else:
         sorted_data = valid_data
 
-    display_data = []
+    table_rows = []
     for row in sorted_data:
-        # V9 核心改动：不再创建 'id' 键，让Dash自己处理
-        formatted_row = {
-            'ticker_display': row.get('ticker'),
-            'price_display': f"{row.get('price', 0.0):.2f}",
-            'change_pct_display': f"{row.get('change_pct', 0.0):.2f}%",
-            'prob_7d_display': f"{row.get('prob_7d', 0.0):.2f}%",
-            'prob_30d_display': f"{row.get('prob_30d', 0.0):.2f}%",
-            'change_pct_raw': row.get('change_pct', 0.0),
-        }
-        for col_id in ['rsi', 'macd', 'bbands', 'ema', 'obv']:
-            formatted_row[f'{col_id}_display'] = '●'
-            formatted_row[f'{col_id}_raw'] = row.get(col_id, 0)
+        # 定义单元格的基础样式
+        cell_style = {'textAlign': 'center', 'borderBottom': '1px solid #333', 'padding': '12px'}
         
-        display_data.append(formatted_row)
+        # 涨跌幅颜色
+        change_pct_color = '#4caf50' if row.get('change_pct', 0.0) > 0 else '#f44336' if row.get('change_pct', 0.0) < 0 else 'white'
+        
+        # 指标单元格
+        indicator_cells = []
+        for col_id in ['rsi', 'macd', 'bbands', 'ema', 'obv']:
+            status = row.get(col_id, 0)
+            color = '#4caf50' if status == 2 else '#ffeb3b' if status == 1 else '#f44336'
+            indicator_cells.append(html.Td('●', style={**cell_style, 'color': color, 'fontWeight': 'bold' if status == 2 else 'normal'}))
 
-    return display_data
+        # 创建HTML表格行
+        table_rows.append(html.Tr([
+            html.Td(row.get('ticker'), style=cell_style),
+            html.Td(f"{row.get('price', 0.0):.2f}", style=cell_style),
+            html.Td(f"{row.get('change_pct', 0.0):.2f}%", style={**cell_style, 'color': change_pct_color}),
+            *indicator_cells, # 解包指标单元格列表
+            html.Td(f"{row.get('prob_7d', 0.0):.2f}%", style=cell_style),
+            html.Td(f"{row.get('prob_30d', 0.0):.2f}%", style=cell_style),
+        ]))
+
+    return table_rows
 
 # --- 运行应用 ---
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0')
-
