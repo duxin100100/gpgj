@@ -1,6 +1,5 @@
 import dash
 from dash import dcc, html, dash_table, Input, Output, State
-import plotly.graph_objects as go
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
@@ -15,9 +14,9 @@ MIN_CONDITIONS_MET = 3
 # 忽略 pandas 在特定情况下的警告
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# --- 核心分析函数 (V5 - 优化版) ---
+# --- 核心分析函数 (V6 - 保持数据纯净) ---
 def analyze_stock(ticker_symbol):
-    """分析单个股票，返回一个字典用于表格行。"""
+    """分析单个股票，返回包含纯净数字的字典用于处理。"""
     try:
         stock = yf.Ticker(ticker_symbol)
         end_date = datetime.now()
@@ -39,13 +38,13 @@ def analyze_stock(ticker_symbol):
         
         latest = hist_data.iloc[-1]
 
-        # 定义指标状态
-        rsi_status = 2 if latest['RSI_14'] < 40 else 1 if 40 <= latest['RSI_14'] < 50 else 0
-        macd_status = 2 if latest['MACD_12_26_9'] > latest['MACDs_12_26_9'] else 0
-        bb_status = 2 if latest['Close'] < latest['BBL_20_2.0'] else 1 if latest['BBL_20_2.0'] <= latest['Close'] < latest['BBM_20_2.0'] else 0
-        ema_status = 2 if latest['Close'] > latest['EMA_20'] else 0
+        # 定义指标状态 (2=满足, 1=中性, 0=不满足)
+        rsi_status = 2 if latest.get('RSI_14', 50) < 40 else 1 if 40 <= latest.get('RSI_14', 50) < 50 else 0
+        macd_status = 2 if latest.get('MACD_12_26_9', 0) > latest.get('MACDs_12_26_9', -1) else 0
+        bb_status = 2 if latest['Close'] < latest.get('BBL_20_2.0', float('inf')) else 1 if latest.get('BBL_20_2.0', float('inf')) <= latest['Close'] < latest.get('BBM_20_2.0', float('inf')) else 0
+        ema_status = 2 if latest['Close'] > latest.get('EMA_20', float('inf')) else 0
         obv_mean = hist_data['OBV'].rolling(window=5).mean().iloc[-1]
-        obv_status = 2 if latest['OBV'] > obv_mean else 0
+        obv_status = 2 if latest.get('OBV', 0) > obv_mean else 0
 
         # 回测盈利概率
         conditions_df = pd.DataFrame({
@@ -64,7 +63,7 @@ def analyze_stock(ticker_symbol):
         signal_df = hist_data[buy_signals].dropna(subset=['future_30d_close'])
         signal_days = len(signal_df)
         
-        prob_7d, prob_30d = 0, 0
+        prob_7d, prob_30d = 0.0, 0.0
         if signal_days > 0:
             win_7d = (signal_df['future_7d_close'] > signal_df['Close']).sum()
             win_30d = (signal_df['future_30d_close'] > signal_df['Close']).sum()
@@ -72,9 +71,9 @@ def analyze_stock(ticker_symbol):
             prob_30d = (win_30d / signal_days) * 100
 
         return {
-            'id': ticker_symbol, # Dash Table需要一个唯一的id
+            'id': ticker_symbol,
             '代码': ticker_symbol,
-            '收盘价': f"{latest_price:.2f}",
+            '收盘价': latest_price,
             '涨跌幅': price_change_percent,
             'RSI': rsi_status, 'MACD': macd_status, '布林带': bb_status, 'EMA': ema_status, 'OBV': obv_status,
             '7日概率': prob_7d,
@@ -89,13 +88,13 @@ app = dash.Dash(__name__, external_stylesheets=['https://codepen.io/chriddyp/pen
 server = app.server # 用于gunicorn部署
 
 # --- 界面布局 (完全用Python定义) ---
-app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', 'padding': '20px'}, children=[
+app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', 'fontFamily': 'sans-serif'}, children=[
     html.H1("美股量化观察列表", style={'textAlign': 'center', 'color': '#4dabf7'}),
     
-    html.Div(className='row', style={'marginBottom': '20px'}, children=[
+    html.Div(className='row', style={'marginBottom': '20px', 'display': 'flex', 'alignItems': 'center'}, children=[
         html.Div(className='six columns', children=[
-            dcc.Input(id='ticker-input', type='text', placeholder='输入股票代码...', style={'backgroundColor': '#333', 'color': '#fff'}),
-            html.Button('添加', id='add-btn', n_clicks=0, style={'marginLeft': '10px'}),
+            dcc.Input(id='ticker-input', type='text', placeholder='输入股票代码...', style={'backgroundColor': '#333', 'color': '#fff', 'border': '1px solid #555', 'padding': '8px'}),
+            html.Button('添加', id='add-btn', n_clicks=0, style={'marginLeft': '10px', 'backgroundColor': '#4dabf7', 'color': 'white', 'border': 'none', 'padding': '8px 12px'}),
         ]),
         html.Div(className='six columns', style={'textAlign': 'right'}, children=[
             dcc.Dropdown(
@@ -107,7 +106,8 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
                     {'label': '30日概率 (高到低)', 'value': 'prob30d_desc'},
                 ],
                 value='default',
-                style={'width': '200px', 'display': 'inline-block', 'color': '#333'}
+                style={'width': '200px', 'display': 'inline-block'},
+                clearable=False
             )
         ])
     ]),
@@ -115,33 +115,27 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
     dcc.Loading(id="loading", type="default", children=[
         dash_table.DataTable(
             id='stock-table',
+            # 定义列，但不在这里定义具体格式，格式化将在callback中完成
             columns=[
-                {'name': '代码', 'id': '代码'},
-                {'name': '收盘价', 'id': '收盘价', 'type': 'numeric', 'format': {'specifier': '.2f'}},
-                {'name': '涨跌幅', 'id': '涨跌幅', 'type': 'numeric', 'format': {'specifier': '.2f'}},
-                {'name': 'RSI', 'id': 'RSI'},
-                {'name': 'MACD', 'id': 'MACD'},
-                {'name': '布林带', 'id': '布林带'},
-                {'name': 'EMA', 'id': 'EMA'},
-                {'name': 'OBV', 'id': 'OBV'},
-                {'name': '7日概率', 'id': '7日概率', 'type': 'numeric', 'format': {'specifier': '.2f'}},
-                {'name': '30日概率', 'id': '30日概率', 'type': 'numeric', 'format': {'specifier': '.2f'}},
+                {'name': '代码', 'id': '代码'}, {'name': '收盘价', 'id': '收盘价'},
+                {'name': '涨跌幅', 'id': '涨跌幅'}, {'name': 'RSI', 'id': 'RSI'},
+                {'name': 'MACD', 'id': 'MACD'}, {'name': '布林带', 'id': '布林带'},
+                {'name': 'EMA', 'id': 'EMA'}, {'name': 'OBV', 'id': 'OBV'},
+                {'name': '7日概率', 'id': '7日概率'}, {'name': '30日概率', 'id': '30日概率'},
             ],
             style_header={'backgroundColor': '#333', 'fontWeight': 'bold'},
-            style_cell={'backgroundColor': '#1e1e1e', 'color': 'white', 'textAlign': 'center'},
+            style_cell={'backgroundColor': '#1e1e1e', 'color': 'white', 'textAlign': 'center', 'border': '1px solid #333'},
+            # 条件格式化，根据数字来决定颜色
             style_data_conditional=[
-                # 涨跌幅颜色
-                {'if': {'column_id': '涨跌幅', 'filter_query': '{涨跌幅} > 0'}, 'color': '#4caf50'},
-                {'if': {'column_id': '涨跌幅', 'filter_query': '{涨跌幅} < 0'}, 'color': '#f44336'},
-                # 指标小圆点颜色
-                *[{'if': {'column_id': c, 'filter_query': f'{{{c}}} = 2'}, 'color': '#4caf50', 'fontWeight': 'bold'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
-                *[{'if': {'column_id': c, 'filter_query': f'{{{c}}} = 1'}, 'color': '#ffeb3b'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
-                *[{'if': {'column_id': c, 'filter_query': f'{{{c}}} = 0'}, 'color': '#f44336'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
+                {'if': {'column_id': '涨跌幅', 'filter_query': '{涨跌幅_raw} > 0'}, 'color': '#4caf50'},
+                {'if': {'column_id': '涨跌幅', 'filter_query': '{涨跌幅_raw} < 0'}, 'color': '#f44336'},
+                *[{'if': {'column_id': c, 'filter_query': f'{{{c}_raw} = 2'}, 'color': '#4caf50', 'fontWeight': 'bold'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
+                *[{'if': {'column_id': c, 'filter_query': f'{{{c}_raw} = 1'}, 'color': '#ffeb3b'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
+                *[{'if': {'column_id': c, 'filter_query': f'{{{c}_raw} = 0'}, 'color': '#f44336'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
             ]
         )
     ]),
     
-    # 用一个隐藏的Div来存储股票列表
     dcc.Store(id='stock-list-store', data=DEFAULT_STOCKS),
 ])
 
@@ -155,8 +149,7 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
 def add_stock(n_clicks, ticker, stock_list):
     if n_clicks > 0 and ticker:
         ticker = ticker.upper().strip()
-        if ticker not in stock_list:
-            # 添加到列表最前面
+        if ticker and ticker not in stock_list:
             return [ticker] + stock_list
     return stock_list
 
@@ -166,28 +159,43 @@ def add_stock(n_clicks, ticker, stock_list):
     Input('sort-select', 'value')
 )
 def update_table(stock_list, sort_value):
-    all_data = [analyze_stock(ticker) for ticker in stock_list]
-    valid_data = [d for d in all_data if d is not None]
+    # 1. 获取原始数据，并过滤掉所有None值
+    raw_data = [analyze_stock(ticker) for ticker in stock_list]
+    valid_data = [d for d in raw_data if d is not None]
 
-    # 格式化涨跌幅和指标显示
-    for row in valid_data:
-        row['涨跌幅'] = f"{row['涨跌幅']:.2f}%"
-        for col in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']:
-            if row[col] == 2: row[col] = '●' # 满足
-            elif row[col] == 1: row[col] = '●' # 中性
-            else: row[col] = '●' # 不满足
-            
-    # 排序逻辑
+    # 2. **先排序**：对纯净的数字进行排序
     if sort_value == 'change_desc':
-        # 需要从字符串解析回数字来排序
-        valid_data.sort(key=lambda x: float(x['涨跌幅'].replace('%','')), reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('涨跌幅', 0), reverse=True)
     elif sort_value == 'prob7d_desc':
-        valid_data.sort(key=lambda x: x['7日概率'], reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('7日概率', 0), reverse=True)
     elif sort_value == 'prob30d_desc':
-        valid_data.sort(key=lambda x: x['30日概率'], reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('30日概率', 0), reverse=True)
+    else:
+        sorted_data = valid_data
 
-    return valid_data
+    # 3. **后格式化**：为表格显示准备最终数据
+    display_data = []
+    for row in sorted_data:
+        # 复制一份以进行格式化，同时保留原始数字用于条件格式化
+        formatted_row = {
+            'id': row['id'],
+            '代码': row['代码'],
+            '收盘价': f"{row['收盘价']:.2f}",
+            '涨跌幅': f"{row['涨跌幅']:.2f}%",
+            '涨跌幅_raw': row['涨跌幅'], # 保留原始数字
+            '7日概率': f"{row['7日概率']:.2f}%",
+            '30日概率': f"{row['30日概率']:.2f}%",
+        }
+        # 格式化指标列
+        for col in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']:
+            formatted_row[col] = '●' # 用圆点显示
+            formatted_row[f'{col}_raw'] = row[col] # 保留原始数字 0, 1, 2
+        
+        display_data.append(formatted_row)
+
+    return display_data
 
 # --- 运行应用 ---
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    # 监听所有网络接口，方便线上部署
+    app.run_server(debug=True, host='0.0.0.0')
