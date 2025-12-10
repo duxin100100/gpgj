@@ -1,237 +1,351 @@
-import dash
-from dash import dcc, html, Input, Output, State
+import streamlit as st
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
-from datetime import datetime, timedelta
-import warnings
+import numpy as np
 
-# --- 配置区 ---
-DEFAULT_STOCKS = ['QQQ', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA']
-HISTORY_YEARS = 3
-MIN_CONDITIONS_MET = 3
+# ============ 页面基础设置 ============
+st.set_page_config(page_title="量化技术信号面板", layout="wide")
+st.markdown(
+    """
+    <style>
+    body { background: #05060a; }
+    .main { background: #05060a; }
+    .card {
+        background: #14151d;
+        border-radius: 16px;
+        padding: 14px 16px 10px;
+        border: 1px solid #262736;
+        box-shadow: 0 18px 40px rgba(0,0,0,0.45);
+        margin-bottom: 12px;
+        color: #f5f5f7;
+        font-size: 13px;
+    }
+    .symbol-line {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font-size: 16px;
+        font-weight: 600;
+    }
+    .price {
+        font-size: 14px;
+        font-weight: 600;
+        color: #fefefe;
+        margin-top: 2px;
+    }
+    .change-up { color: #4ade80; font-size: 12px; font-weight: 500; }
+    .change-down { color: #fb7185; font-size: 12px; font-weight: 500; }
+    .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-left: 6px;
+    }
+    .dot-bull { background: #4ade80; }
+    .dot-neutral { background: #facc15; }
+    .dot-bear { background: #fb7185; }
+    .label { color: #9ca3af; }
+    .prob-good { color: #4ade80; font-weight:600; }
+    .prob-mid { color: #facc15; font-weight:600; }
+    .prob-bad { color: #fb7185; font-weight:600; }
+    .score { font-size: 11px; color: #9ca3af; margin-top: 4px; }
+    .score span { color: #4ade80; margin-left: 4px; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-warnings.filterwarnings("ignore", category=FutureWarning)
-
-# --- 核心分析函数 (V10 - 保持V8的英文内核) ---
-def analyze_stock(ticker_symbol):
-    """分析单个股票，返回包含纯英文键的字典。"""
-    try:
-        stock = yf.Ticker(ticker_symbol)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=HISTORY_YEARS * 365)
-        hist_data = stock.history(
-            start=start_date,
-            end=end_date,
-            interval="1d",
-            auto_adjust=True
-        )
-
-        # 数据太少直接丢弃
-        if hist_data.empty or len(hist_data) < 40:
-            print(f"[INFO] {ticker_symbol}: history too short")
-            return None
-
-        # -------- 价格变化 --------
-        latest_price = hist_data['Close'].iloc[-1]
-        previous_close = hist_data['Close'].iloc[-2]
-        price_change_percent = ((latest_price - previous_close) / previous_close) * 100
-
-        # -------- 技术指标计算 --------
-        # 注意：这里如果 pandas_ta 没装好，会直接报错
-        hist_data.ta.rsi(length=14, append=True)
-        hist_data.ta.macd(fast=12, slow=26, signal=9, append=True)
-        hist_data.ta.bbands(length=20, std=2, append=True)
-        hist_data.ta.ema(length=20, append=True)
-        hist_data.ta.obv(append=True)
-
-        latest = hist_data.iloc[-1]
-
-        # 安全地取指标，缺失时给默认值
-        rsi_val = latest.get('RSI_14', 50)
-        macd_val = latest.get('MACD_12_26_9', 0)
-        macds_val = latest.get('MACDs_12_26_9', 0)
-        bbl_val = latest.get('BBL_20_2.0', float('inf'))
-        bbm_val = latest.get('BBM_20_2.0', float('inf'))
-        ema_val = latest.get('EMA_20', latest['Close'])
-        obv_series = hist_data.get('OBV')
-
-        # -------- 各指标状态打分（0/1/2） --------
-        # RSI
-        if rsi_val < 40:
-            rsi_status = 2
-        elif 40 <= rsi_val < 50:
-            rsi_status = 1
-        else:
-            rsi_status = 0
-
-        # MACD
-        macd_status = 2 if macd_val > macds_val else 0
-
-        # 布林带
-        close = latest['Close']
-        if close < bbl_val:
-            bb_status = 2
-        elif bbl_val <= close < bbm_val:
-            bb_status = 1
-        else:
-            bb_status = 0
-
-        # EMA
-        ema_status = 2 if close > ema_val else 0
-
-        # OBV
-        if obv_series is not None and obv_series.notna().sum() >= 5:
-            obv_ma5 = obv_series.rolling(window=5).mean().iloc[-1]
-            obv_status = 2 if latest.get('OBV', 0) > obv_ma5 else 0
-        else:
-            obv_status = 0
-
-        # -------- 组合条件 + 历史统计 --------
-        # 用 get 防止 KeyError
-        rsi_series = hist_data.get('RSI_14')
-        macd_main = hist_data.get('MACD_12_26_9')
-        macd_sig = hist_data.get('MACDs_12_26_9')
-        bbl_series = hist_data.get('BBL_20_2.0')
-        ema_series = hist_data.get('EMA_20')
-        obv_series = hist_data.get('OBV')
-
-        # 没有这些列时，用 False 填充
-        def safe_cond(series, cond_fn):
-            if series is None:
-                return pd.Series(False, index=hist_data.index)
-            return cond_fn(series)
-
-        conditions_df = pd.DataFrame({
-            'rsi_ok': safe_cond(rsi_series, lambda s: s < 40),
-            'macd_ok': (macd_main > macd_sig) if (macd_main is not None and macd_sig is not None) 
-                        else pd.Series(False, index=hist_data.index),
-            'bb_ok': (hist_data['Close'] < bbl_series) if bbl_series is not None \
-                        else pd.Series(False, index=hist_data.index),
-            'ema_ok': (hist_data['Close'] > ema_series) if ema_series is not None \
-                        else pd.Series(False, index=hist_data.index),
-            'obv_ok': (obv_series > obv_series.rolling(window=5).mean()) if obv_series is not None \
-                        else pd.Series(False, index=hist_data.index),
-        })
-
-        conditions_met_count = conditions_df.sum(axis=1)
-        buy_signals = (conditions_met_count >= MIN_CONDITIONS_MET)
-
-        # -------- 未来收益统计 --------
-        hist_data['future_7d_close'] = hist_data['Close'].shift(-7)
-        hist_data['future_30d_close'] = hist_data['Close'].shift(-30)
-
-        signal_df = hist_data[buy_signals].dropna(subset=['future_30d_close'])
-        signal_days = len(signal_df)
-
-        prob_7d, prob_30d = 0.0, 0.0
-        if signal_days > 0:
-            win_7d = (signal_df['future_7d_close'] > signal_df['Close']).sum()
-            win_30d = (signal_df['future_30d_close'] > signal_df['Close']).sum()
-            prob_7d = (win_7d / signal_days) * 100
-            prob_30d = (win_30d / signal_days) * 100
-
-        return {
-            'ticker': ticker_symbol,
-            'price': float(latest_price),
-            'change_pct': float(price_change_percent),
-            'rsi': int(rsi_status),
-            'macd': int(macd_status),
-            'bbands': int(bb_status),
-            'ema': int(ema_status),
-            'obv': int(obv_status),
-            'prob_7d': float(prob_7d),
-            'prob_30d': float(prob_30d),
-        }
-
-    except Exception as e:
-        print(f"[ERROR] analyze_stock({ticker_symbol}): {e}")
-        return None
+st.title("📈 量化技术信号面板")
+st.write("默认展示：QQQ + 美股七姐妹，可在上方添加/置顶其它股票。")
 
 
-# --- Dash 应用定义 ---
-app = dash.Dash(__name__, external_stylesheets=['https://codepen.io/chriddyp/pen/bWLwgP.css'])
-server = app.server
+# ============ numpy 实现的技术指标 ============
 
-# --- 界面布局 (V10 - 手动构建HTML表格) ---
-app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', 'fontFamily': 'sans-serif'}, children=[
-    html.H1("美股量化观察列表", style={'textAlign': 'center', 'color': '#4dabf7'}),
-    html.Div(className='row', style={'marginBottom': '20px', 'display': 'flex', 'alignItems': 'center'}, children=[
-        html.Div(className='six columns', children=[
-            dcc.Input(id='ticker-input', type='text', placeholder='输入股票代码...', style={'backgroundColor': '#333', 'color': '#fff', 'border': '1px solid #555', 'padding': '8px'}),
-            html.Button('添加', id='add-btn', n_clicks=0, style={'marginLeft': '10px', 'backgroundColor': '#4dabf7', 'color': 'white', 'border': 'none', 'padding': '8px 12px'}),
-        ]),
-        html.Div(className='six columns', style={'textAlign': 'right'}, children=[
-            dcc.Dropdown(id='sort-select', options=[{'label': '默认', 'value': 'default'},{'label': '涨跌幅 (高到低)', 'value': 'change_desc'},{'label': '7日概率 (高到低)', 'value': 'prob7d_desc'},{'label': '30日概率 (高到低)', 'value': 'prob30d_desc'}], value='default', style={'width': '200px', 'display': 'inline-block'}, clearable=False)
-        ])
-    ]),
-    
-    dcc.Loading(id="loading", type="default", children=[
-        html.Table(className='u-full-width', children=[
-            html.Thead(html.Tr([
-                html.Th('代码'), html.Th('收盘价'), html.Th('涨跌幅'),
-                html.Th('RSI'), html.Th('MACD'), html.Th('布林带'),
-                html.Th('EMA'), html.Th('OBV'),
-                html.Th('7日概率'), html.Th('30日概率'),
-            ], style={'backgroundColor': '#333', 'color': 'white'})),
-            html.Tbody(id='stock-table-body') # 表格内容将由Callback填充
-        ])
-    ]),
-    dcc.Store(id='stock-list-store', data=DEFAULT_STOCKS),
-])
+def ema_np(x: np.ndarray, span: int) -> np.ndarray:
+    alpha = 2 / (span + 1)
+    ema = np.zeros_like(x, dtype=float)
+    ema[0] = x[0]
+    for i in range(1, len(x)):
+        ema[i] = alpha * x[i] + (1 - alpha) * ema[i - 1]
+    return ema
 
-# --- 交互逻辑 (Callback - V10 终极版) ---
-@app.callback(Output('stock-list-store', 'data'), Input('add-btn', 'n_clicks'), [State('ticker-input', 'value'), State('stock-list-store', 'data')])
-def add_stock(n_clicks, ticker, stock_list):
-    if n_clicks > 0 and ticker:
-        ticker = ticker.upper().strip()
-        if ticker and ticker not in stock_list:
-            return [ticker] + stock_list
-    return stock_list
 
-@app.callback(Output('stock-table-body', 'children'), [Input('stock-list-store', 'data'), Input('sort-select', 'value')])
-def update_table(stock_list, sort_value):
-    raw_data = [analyze_stock(ticker) for ticker in stock_list]
-    valid_data = [d for d in raw_data if d is not None]
-    if not valid_data:
-        return []
+def macd_hist_np(close: np.ndarray) -> np.ndarray:
+    ema12 = ema_np(close, 12)
+    ema26 = ema_np(close, 26)
+    macd_line = ema12 - ema26
+    signal = ema_np(macd_line, 9)
+    return macd_line - signal
 
-    if sort_value == 'change_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('change_pct', 0.0), reverse=True)
-    elif sort_value == 'prob7d_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('prob_7d', 0.0), reverse=True)
-    elif sort_value == 'prob30d_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('prob_30d', 0.0), reverse=True)
+
+def rsi_np(close: np.ndarray, period: int = 14) -> np.ndarray:
+    delta = np.diff(close, prepend=close[0])
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+
+    gain_ema = np.zeros_like(gain)
+    loss_ema = np.zeros_like(loss)
+
+    alpha = 1 / period
+    gain_ema[0] = gain[0]
+    loss_ema[0] = loss[0]
+    for i in range(1, len(gain)):
+        gain_ema[i] = alpha * gain[i] + (1 - alpha) * gain_ema[i - 1]
+        loss_ema[i] = alpha * loss[i] + (1 - alpha) * loss_ema[i - 1]
+
+    rs = gain_ema / (loss_ema + 1e-9)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def atr_np(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    prev_close = np.roll(close, 1)
+    prev_close[0] = close[0]
+    tr1 = high - low
+    tr2 = np.abs(high - prev_close)
+    tr3 = np.abs(low - prev_close)
+    tr = np.maximum(tr1, np.maximum(tr2, tr3))
+
+    atr = np.zeros_like(tr)
+    atr[0] = tr[0]
+    alpha = 1 / period
+    for i in range(1, len(tr)):
+        atr[i] = alpha * tr[i] + (1 - alpha) * atr[i - 1]
+    return atr
+
+
+def rolling_mean_np(x: np.ndarray, window: int) -> np.ndarray:
+    """简单移动平均，用于 vol/atr/obv 均线"""
+    if len(x) < window:
+        return np.full_like(x, np.nan, dtype=float)
+    cumsum = np.cumsum(np.insert(x, 0, 0.0))
+    ma = (cumsum[window:] - cumsum[:-window]) / window
+    head = np.full(window - 1, ma[0])
+    return np.concatenate([head, ma])
+
+
+def obv_np(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
+    direction = np.sign(np.diff(close, prepend=close[0]))
+    return np.cumsum(direction * volume)
+
+
+# ============ 计算单只股票的所有指标 + 回测 ============
+
+def compute_stock_metrics(symbol: str):
+    # 下载历史数据并转成 numpy，彻底避免 pandas 对齐问题
+    df = yf.download(symbol, period="3y", interval="1d")
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna().reset_index(drop=True)
+
+    if df.empty:
+        raise ValueError("无历史数据")
+
+    close = df["Close"].to_numpy(dtype=float)
+    high = df["High"].to_numpy(dtype=float)
+    low = df["Low"].to_numpy(dtype=float)
+    vol = df["Volume"].to_numpy(dtype=float)
+
+    macd_hist = macd_hist_np(close)
+    rsi = rsi_np(close)
+    atr = atr_np(high, low, close)
+    obv = obv_np(close, vol)
+
+    vol_ma20 = rolling_mean_np(vol, 20)
+    atr_ma20 = rolling_mean_np(atr, 20)
+    obv_ma20 = rolling_mean_np(obv, 20)
+
+    # 信号（多头 =1，其他=0）
+    sig_macd = (macd_hist > 0).astype(int)
+    sig_vol = (vol > vol_ma20 * 1.1).astype(int)
+    sig_rsi = (rsi >= 60).astype(int)
+    sig_atr = (atr > atr_ma20 * 1.1).astype(int)
+    sig_obv = (obv > obv_ma20 * 1.05).astype(int)
+
+    score = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
+
+    # 回测：未来 N 日盈利概率
+    def backtest(days: int, min_score: int = 3):
+        wins = 0
+        total = 0
+        rets = []
+        for i in range(len(close) - days):
+            if score[i] >= min_score:
+                total += 1
+                r = close[i + days] / close[i] - 1.0
+                rets.append(r)
+                if r > 0:
+                    wins += 1
+        if total == 0:
+            return 0.0, 0.0
+        return wins / total, float(np.mean(rets))
+
+    prob7, avg7 = backtest(7)
+    prob30, avg30 = backtest(30)
+
+    # 当前最新值（最后一个元素）
+    last_close = close[-1]
+    prev_close = close[-2] if len(close) >= 2 else close[-1]
+    change_pct = (last_close / prev_close - 1.0) * 100
+    last_idx = -1
+
+    # 指标状态，用于 UI 打点
+    indicators = []
+
+    macd_status = "bull" if macd_hist[last_idx] > 0 else "bear"
+    indicators.append({"name": "MACD 多头/空头", "status": macd_status})
+
+    if vol[last_idx] > vol_ma20[last_idx] * 1.1:
+        vol_status = "bull"
+    elif vol[last_idx] < vol_ma20[last_idx] * 0.9:
+        vol_status = "bear"
     else:
-        sorted_data = valid_data
+        vol_status = "neutral"
+    indicators.append({"name": "成交量相对20日均量", "status": vol_status})
 
-    table_rows = []
-    for row in sorted_data:
-        # 定义单元格的基础样式
-        cell_style = {'textAlign': 'center', 'borderBottom': '1px solid #333', 'padding': '12px'}
-        
-        # 涨跌幅颜色
-        change_pct_color = '#4caf50' if row.get('change_pct', 0.0) > 0 else '#f44336' if row.get('change_pct', 0.0) < 0 else 'white'
-        
-        # 指标单元格
-        indicator_cells = []
-        for col_id in ['rsi', 'macd', 'bbands', 'ema', 'obv']:
-            status = row.get(col_id, 0)
-            color = '#4caf50' if status == 2 else '#ffeb3b' if status == 1 else '#f44336'
-            indicator_cells.append(html.Td('●', style={**cell_style, 'color': color, 'fontWeight': 'bold' if status == 2 else 'normal'}))
+    if rsi[last_idx] >= 60:
+        rsi_status = "bull"
+    elif rsi[last_idx] <= 40:
+        rsi_status = "bear"
+    else:
+        rsi_status = "neutral"
+    indicators.append({"name": "RSI 区间", "status": rsi_status})
 
-        # 创建HTML表格行
-        table_rows.append(html.Tr([
-            html.Td(row.get('ticker'), style=cell_style),
-            html.Td(f"{row.get('price', 0.0):.2f}", style=cell_style),
-            html.Td(f"{row.get('change_pct', 0.0):.2f}%", style={**cell_style, 'color': change_pct_color}),
-            *indicator_cells, # 解包指标单元格列表
-            html.Td(f"{row.get('prob_7d', 0.0):.2f}%", style=cell_style),
-            html.Td(f"{row.get('prob_30d', 0.0):.2f}%", style=cell_style),
-        ]))
+    if atr[last_idx] > atr_ma20[last_idx] * 1.1:
+        atr_status = "bull"
+    elif atr[last_idx] < atr_ma20[last_idx] * 0.9:
+        atr_status = "bear"
+    else:
+        atr_status = "neutral"
+    indicators.append({"name": "ATR 波动率", "status": atr_status})
 
-    return table_rows
+    if obv[last_idx] > obv_ma20[last_idx] * 1.05:
+        obv_status = "bull"
+    elif obv[last_idx] < obv_ma20[last_idx] * 0.95:
+        obv_status = "bear"
+    else:
+        obv_status = "neutral"
+    indicators.append({"name": "OBV 资金趋势", "status": obv_status})
 
-# --- 运行应用 ---
-if __name__ == '__main__':
-    app.run_server(debug=True, host='0.0.0.0')
+    return {
+        "symbol": symbol,
+        "price": float(last_close),
+        "change": float(change_pct),
+        "prob7": float(prob7),
+        "prob30": float(prob30),
+        "avg7": float(avg7),
+        "avg30": float(avg30),
+        "indicators": indicators,
+        "score": int(score[last_idx]),
+    }
+
+
+def prob_class(p):
+    if p >= 0.65:
+        return "prob-good"
+    if p >= 0.45:
+        return "prob-mid"
+    return "prob-bad"
+
+
+@st.cache_data(show_spinner=False)
+def get_stock_metrics_cached(symbol: str):
+    return compute_stock_metrics(symbol)
+
+
+# ============ Streamlit 交互层：平铺 QQQ + 七姐妹 ============
+
+default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = default_watchlist.copy()
+
+top_c1, top_c2, top_c3 = st.columns([2, 1.5, 1])
+
+with top_c1:
+    new_symbol = st.text_input("输入股票代码添加到自选（例：TSLA）", value="", max_chars=10)
+with top_c2:
+    add_btn = st.button("➕ 添加/置顶")
+with top_c3:
+    sort_by = st.selectbox(
+        "排序方式",
+        ["默认顺序", "涨跌幅", "7日盈利概率", "30日盈利概率", "信号强度"],
+        index=0,
+    )
+
+if add_btn and new_symbol.strip():
+    sym = new_symbol.strip().upper()
+    if sym in st.session_state.watchlist:
+        st.session_state.watchlist.remove(sym)
+    st.session_state.watchlist.insert(0, sym)
+
+rows = []
+
+for sym in st.session_state.watchlist:
+    try:
+        with st.spinner(f"载入 {sym} ..."):
+            metrics = get_stock_metrics_cached(sym)
+        rows.append(metrics)
+    except Exception as e:
+        st.warning(f"{sym} 加载失败：{e}")
+        continue
+
+# 排序
+if sort_by == "涨跌幅":
+    rows.sort(key=lambda x: x["change"], reverse=True)
+elif sort_by == "7日盈利概率":
+    rows.sort(key=lambda x: x["prob7"], reverse=True)
+elif sort_by == "30日盈利概率":
+    rows.sort(key=lambda x: x["prob30"], reverse=True)
+elif sort_by == "信号强度":
+    rows.sort(key=lambda x: x["score"], reverse=True)
+# 默认顺序就用 watchlist 的顺序
+
+# 平铺卡片
+if not rows:
+    st.info("暂无自选股票，请先在上方输入代码添加。")
+else:
+    cols_per_row = 4
+    for i in range(0, len(rows), cols_per_row):
+        cols = st.columns(cols_per_row)
+        for col, row in zip(cols, rows[i : i + cols_per_row]):
+            with col:
+                change_class = "change-up" if row["change"] >= 0 else "change-down"
+                change_str = f"{row['change']:+.2f}%"
+                prob7_text = f"{row['prob7']*100:.1f}%"
+                prob30_text = f"{row['prob30']*100:.1f}%"
+                prob7_class = prob_class(row["prob7"])
+                prob30_class = prob_class(row["prob30"])
+
+                indicators_html = ""
+                for ind in row["indicators"]:
+                    indicators_html += (
+                        f"<div class='label'>{ind['name']}"
+                        f"<span class='dot dot-{ind['status']}'></span></div>"
+                    )
+
+                html = f"""
+                <div class="card">
+                  <div class="symbol-line">
+                    <span>{row['symbol']}</span>
+                    <span class="{change_class}">{change_str}</span>
+                  </div>
+                  <div class="price">${row['price']:.2f}</div>
+                  <div style="margin-top:6px;margin-bottom:6px">
+                    {indicators_html}
+                  </div>
+                  <div style="border-bottom:1px dashed #262736;margin:6px 0 4px;"></div>
+                  <div>
+                    <div><span class="label">未来7日盈利概率</span>
+                      <span class="{prob7_class}">{prob7_text}</span>
+                    </div>
+                    <div><span class="label">未来30日盈利概率</span>
+                      <span class="{prob30_class}">{prob30_text}</span>
+                    </div>
+                  </div>
+                  <div class="score">
+                    信号强度：<span>{row['score']}/5</span>
+                  </div>
+                </div>
+                """
+                st.markdown(html, unsafe_allow_html=True)
+
+st.caption("数据来源：yfinance，回测区间约近3年，仅作个人量化研究，不构成投资建议。")
