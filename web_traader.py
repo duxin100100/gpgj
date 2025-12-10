@@ -22,6 +22,7 @@ st.markdown(
         color:#f5f5f7;
         font-size:13px;
         transition:0.15s;
+        margin-bottom:18px;  /* 卡片之间留缝隙 */
     }
     .card:hover {
         transform:translateY(-3px);
@@ -54,11 +55,13 @@ st.markdown(
 st.title("📈 量化技术信号面板")
 
 # ============ 通过 Yahoo HTTP API 获取数据 ============
-YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3y&interval=1d"
+
+YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval=1d"
 
 
-def fetch_yahoo_ohlcv(symbol: str):
-    url = YAHOO_URL.format(symbol=symbol)
+def fetch_yahoo_ohlcv(symbol: str, years: int):
+    range_str = f"{years}y"
+    url = YAHOO_URL.format(symbol=symbol, range=range_str)
     resp = requests.get(
         url,
         headers={"User-Agent": "Mozilla/5.0"},
@@ -90,6 +93,7 @@ def fetch_yahoo_ohlcv(symbol: str):
 
 
 # ============ numpy 技术指标 ============
+
 def ema_np(x: np.ndarray, span: int) -> np.ndarray:
     alpha = 2 / (span + 1)
     ema = np.zeros_like(x, dtype=float)
@@ -157,12 +161,16 @@ def obv_np(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
     return np.cumsum(direction * volume)
 
 
-# ============ 回测相关函数 ============
+# ============ 回测统计 ============
+
 def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_score: int = 3):
     """
     返回：
       胜率、平均收益、信号次数、最大回撤、盈亏比、盈利次数
     """
+    if len(close) <= days:
+        return 0.0, 0.0, 0, 0.0, 0.0, 0
+
     idx = np.where(score[:-days] >= min_score)[0]
     if len(idx) == 0:
         return 0.0, 0.0, 0, 0.0, 0.0, 0
@@ -174,13 +182,11 @@ def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_sco
     win_rate = float(win_mask.mean())
     avg_ret = float(rets.mean())
 
-    # 最大回撤（策略权益曲线）
     equity = np.cumprod(1 + rets)
     peak = np.maximum.accumulate(equity)
     dd = equity / peak - 1
-    max_dd = float(dd.min())  # 负数
+    max_dd = float(dd.min())
 
-    # 盈亏比：盈利总和 / 亏损绝对值总和（后面不展示，但统计保留）
     profit = rets[rets > 0].sum()
     loss = -rets[rets < 0].sum()
     if loss > 0:
@@ -191,9 +197,10 @@ def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_sco
     return win_rate, avg_ret, signals, max_dd, pf, wins
 
 
-# ============ 计算单只股票的指标 + 回测 ============
-def compute_stock_metrics(symbol: str):
-    close, high, low, volume = fetch_yahoo_ohlcv(symbol)
+# ============ 计算单只股票 ============
+
+def compute_stock_metrics(symbol: str, years: int):
+    close, high, low, volume = fetch_yahoo_ohlcv(symbol, years=years)
 
     macd_hist = macd_hist_np(close)
     rsi = rsi_np(close)
@@ -212,8 +219,7 @@ def compute_stock_metrics(symbol: str):
 
     score = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
 
-    # 回测统计
-    prob7, avg7, signals7, max_dd7, pf7, wins7 = backtest_with_stats(close, score, days=7)
+    prob7, avg7, signals7, max_dd7, _, wins7 = backtest_with_stats(close, score, days=7)
     prob30, avg30, signals30, _, _, wins30 = backtest_with_stats(close, score, days=30)
 
     last_close = close[-1]
@@ -221,7 +227,6 @@ def compute_stock_metrics(symbol: str):
     change_pct = (last_close / prev_close - 1.0) * 100
     last_idx = -1
 
-    # 指标状态用于 UI 点
     indicators = []
 
     macd_status = "bull" if macd_hist[last_idx] > 0 else "bear"
@@ -285,22 +290,22 @@ def prob_class(p):
     return "prob-bad"
 
 
-# 用 version=3 强制刷新缓存
+# version 加上 years，强制新缓存
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, version: int = 3):
-    return compute_stock_metrics(symbol)
+def get_stock_metrics_cached(symbol: str, years: int, version: int = 4):
+    return compute_stock_metrics(symbol, years=years)
 
 
-# ============ Streamlit 交互层：平铺 QQQ + 七姐妹 ============
+# ============ Streamlit 交互层 ============
+
 default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
 
-# 输入框 / 添加按钮 / 排序，对齐一行
-top_c1, top_c2, top_c3 = st.columns([2.8, 1.2, 1.3])
+# 输入框 / 添加按钮 / 排序 / 回测区间
+top_c1, top_c2, top_c3, top_c4 = st.columns([2.4, 1.1, 1.1, 1.1])
 
 with top_c1:
-    # 去掉上方 label，只保留 placeholder
     new_symbol = st.text_input(
         "",
         value="",
@@ -312,10 +317,20 @@ with top_c2:
     add_btn = st.button("➕ 添加/置顶")
 with top_c3:
     sort_by = st.selectbox(
-        "排序方式",
+        "",
         ["默认顺序", "涨跌幅", "7日盈利概率", "30日盈利概率", "信号强度"],
         index=0,
+        label_visibility="collapsed",   # 删除“排序方式”字样
     )
+with top_c4:
+    years_label = st.selectbox(
+        "回测区间",
+        ["1年", "2年", "3年", "5年", "10年"],
+        index=2,
+    )
+
+years_map = {"1年": 1, "2年": 2, "3年": 3, "5年": 5, "10年": 10}
+backtest_years = years_map[years_label]
 
 if add_btn and new_symbol.strip():
     sym = new_symbol.strip().upper()
@@ -328,7 +343,7 @@ rows = []
 for sym in st.session_state.watchlist:
     try:
         with st.spinner(f"载入 {sym} ..."):
-            metrics = get_stock_metrics_cached(sym)
+            metrics = get_stock_metrics_cached(sym, years=backtest_years)
         rows.append(metrics)
     except Exception as e:
         st.warning(f"{sym} 加载失败：{e}")
@@ -368,19 +383,10 @@ else:
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
-                # 统计字段
                 signals7 = row.get("signals7", 0)
                 wins7 = row.get("wins7", 0)
                 signals30 = row.get("signals30", 0)
                 wins30 = row.get("wins30", 0)
-                avg7 = row.get("avg7", 0.0) * 100
-                max_dd7 = row.get("max_dd7", 0.0) * 100
-
-                stats_lines = []
-                stats_lines.append(f"7日信号次数：{signals7} 次，盈利：{wins7} 次")
-                stats_lines.append(f"7日平均收益：{avg7:+.2f}%")
-                stats_lines.append(f"策略最大回撤：{max_dd7:.2f}%")
-                stats_html = "<br>".join(stats_lines)
 
                 html = f"""
                 <div class="card">
@@ -404,11 +410,10 @@ else:
                     </div>
                   </div>
                   <div class="score">
-                    信号强度：<span>{row['score']}/5</span><br/>
-                    {stats_html}
+                    信号强度：<span>{row['score']}/5</span>
                   </div>
                 </div>
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-st.caption("数据来源：Yahoo Finance HTTP 接口，回测区间约近3年，基于历史信号统计，仅作个人量化研究，不构成投资建议。")
+st.caption("数据来源：Yahoo Finance HTTP 接口，回测区间基于所选年份，统计窗口约为该区间内的历史信号，仅作个人量化研究，不构成投资建议。")
