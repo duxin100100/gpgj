@@ -28,11 +28,21 @@ st.markdown(
         box-shadow:0 26px 48px rgba(0,0,0,0.6);
     }
 
-    .symbol-line { display:flex; gap:8px; font-size:15px; font-weight:600; }
-    .price { font-size:14px; margin-top:2px; }
-
-    .change-up { color:#4ade80; font-size:12px; }
-    .change-down { color:#fb7185; font-size:12px; }
+    .symbol-line {
+        display:flex;
+        gap:10px;
+        align-items:baseline;
+        font-size:20px;  /* 整体放大一倍 */
+        margin-bottom:2px;
+    }
+    .symbol-code {
+        font-weight:800;
+    }
+    .symbol-price {
+        font-size:20px;
+    }
+    .change-up { color:#4ade80; font-size:16px; }
+    .change-down { color:#fb7185; font-size:16px; }
 
     .dot { width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:6px; }
     .dot-bull { background:#4ade80; }
@@ -56,6 +66,7 @@ st.markdown(
         font-size:13px;
         font-weight:700;
         color:#e5e7eb;
+        min-width:64px;
     }
     .dot-score{
         width:10px;
@@ -130,7 +141,6 @@ def fetch_yahoo_ohlcv(symbol: str, range_str: str, interval: str):
 
 
 # ============ 技术指标 ============
-
 def ema_np(x: np.ndarray, span: int) -> np.ndarray:
     alpha = 2 / (span + 1)
     ema = np.zeros_like(x, dtype=float)
@@ -199,10 +209,9 @@ def obv_np(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
 
 
 # ============ 回测统计（带均盈均亏+PF） ============
-
 def backtest_with_stats(close: np.ndarray, score: np.ndarray, steps: int, min_score: int = 3):
     """
-    steps: 向前看的 bar 数（在不同周期下代表 7天/30天）
+    steps: 向前看的 bar 数
     返回：
       胜率、净平均收益、信号次数、最大回撤、盈利因子PF、盈利次数、平均盈利、平均亏损
     """
@@ -247,7 +256,6 @@ def backtest_with_stats(close: np.ndarray, score: np.ndarray, steps: int, min_sc
 
 
 # ============ 计算单只股票 ============
-
 def compute_stock_metrics(symbol: str, cfg_key: str):
     cfg = BACKTEST_CONFIG[cfg_key]
     close, high, low, volume = fetch_yahoo_ohlcv(
@@ -381,54 +389,50 @@ def prob_class(p):
     return "prob-bad"
 
 
-# ============ 根据信号给出建议（买入/观望/卖出 + 1~5 点） ============
-
-def decide_advice(prob30: float, pf30: float):
+# ============ 建议逻辑（共用，给 7日/30日 单独算） ============
+def decide_advice(prob: float, pf: float):
     """
     返回: (label, intensity, color_class)
       label: 建议买入 / 观望 / 建议卖出
       intensity: 1~5 点
       color_class: buy / hold / sell
     """
-    # 安全兜底
-    if pf30 <= 0:
-        pf30 = 0.0
+    if pf <= 0:
+        pf = 0.0
 
-    # 先判断大类
-    if prob30 >= 0.60 and pf30 >= 1.20:
+    if prob >= 0.60 and pf >= 1.20:
         kind = "buy"
-    elif prob30 <= 0.40 and pf30 <= 0.80:
+    elif prob <= 0.40 and pf <= 0.80:
         kind = "sell"
     else:
         kind = "hold"
 
-    # 计算强度
     if kind == "buy":
         score = 0
-        if prob30 >= 0.60: score += 1
-        if prob30 >= 0.65: score += 1
-        if prob30 >= 0.70: score += 1
-        if pf30   >= 1.20: score += 1
-        if pf30   >= 1.60: score += 1
+        if prob >= 0.60: score += 1
+        if prob >= 0.65: score += 1
+        if prob >= 0.70: score += 1
+        if pf   >= 1.20: score += 1
+        if pf   >= 1.60: score += 1
         intensity = max(1, min(5, score))
         label = "建议买入"
         color = "buy"
     elif kind == "sell":
         score = 0
-        if prob30 <= 0.40: score += 1
-        if prob30 <= 0.35: score += 1
-        if prob30 <= 0.30: score += 1
-        if pf30   <= 0.80: score += 1
-        if pf30   <= 0.60: score += 1
+        if prob <= 0.40: score += 1
+        if prob <= 0.35: score += 1
+        if prob <= 0.30: score += 1
+        if pf   <= 0.80: score += 1
+        if pf   <= 0.60: score += 1
         intensity = max(1, min(5, score))
         label = "建议卖出"
         color = "sell"
     else:  # hold
         score = 1
-        if 0.45 <= prob30 <= 0.55: score += 1
-        if 0.47 <= prob30 <= 0.53: score += 1
-        if 0.90 <= pf30 <= 1.10:   score += 1
-        if 0.95 <= pf30 <= 1.05:   score += 1
+        if 0.45 <= prob <= 0.55: score += 1
+        if 0.47 <= prob <= 0.53: score += 1
+        if 0.90 <= pf <= 1.10:   score += 1
+        if 0.95 <= pf <= 1.05:   score += 1
         intensity = max(1, min(5, score))
         label = "观望"
         color = "hold"
@@ -437,14 +441,12 @@ def decide_advice(prob30: float, pf30: float):
 
 
 # ============ 缓存 ============
-
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 7):
+def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 8):
     return compute_stock_metrics(symbol, cfg_key=cfg_key)
 
 
 # ============ Streamlit 交互层 ============
-
 default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
@@ -500,7 +502,6 @@ elif sort_by == "30日盈利概率":
     rows.sort(key=lambda x: x["prob30"], reverse=True)
 
 # ============ 卡片展示 ============
-
 if not rows:
     st.info("暂无自选股票，请先在上方输入代码添加。")
 else:
@@ -527,7 +528,6 @@ else:
                 prob7_class = prob_class(row["prob7"])
                 prob30_class = prob_class(row["prob30"])
 
-                # 指标行
                 indicators_html = ""
                 for ind in row["indicators"]:
                     indicators_html += (
@@ -535,30 +535,40 @@ else:
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
-                # 操作建议
-                advice_label, intensity, advice_kind = decide_advice(row["prob30"], pf30)
-                if advice_kind == "buy":
-                    dot_class_on = "dot-score dot-score-buy"
-                    advice_class = "advice-text advice-buy"
-                elif advice_kind == "sell":
-                    dot_class_on = "dot-score dot-score-sell"
-                    advice_class = "advice-text advice-sell"
-                else:
-                    dot_class_on = "dot-score dot-score-hold"
-                    advice_class = "advice-text advice-hold"
+                # 7 日 & 30 日 建议分别计算
+                adv7_label, adv7_intensity, adv7_kind = decide_advice(row["prob7"], pf7)
+                adv30_label, adv30_intensity, adv30_kind = decide_advice(row["prob30"], pf30)
 
-                dots_html = (
-                    f"<span class='{dot_class_on}'></span>" * intensity +
-                    "<span class='dot-score dot-score-off'></span>" * (5 - intensity)
+                def build_advice_html(label, intensity, kind):
+                    if kind == "buy":
+                        dot_on_class = "dot-score dot-score-buy"
+                        advice_class = "advice-text advice-buy"
+                    elif kind == "sell":
+                        dot_on_class = "dot-score dot-score-sell"
+                        advice_class = "advice-text advice-sell"
+                    else:
+                        dot_on_class = "dot-score dot-score-hold"
+                        advice_class = "advice-text advice-hold"
+                    dots = (
+                        f"<span class='{dot_on_class}'></span>" * intensity +
+                        "<span class='dot-score dot-score-off'></span>" * (5 - intensity)
+                    )
+                    return advice_class, label, dots
+
+                adv7_class, adv7_text, adv7_dots = build_advice_html(
+                    adv7_label, adv7_intensity, adv7_kind
+                )
+                adv30_class, adv30_text, adv30_dots = build_advice_html(
+                    adv30_label, adv30_intensity, adv30_kind
                 )
 
                 html = f"""
                 <div class="card">
                   <div class="symbol-line">
-                    <span>{row['symbol']}</span>
+                    <span class="symbol-code">{row['symbol']}</span>
+                    <span class="symbol-price">${row['price']:.2f}</span>
                     <span class="{change_class}">{change_str}</span>
                   </div>
-                  <div class="price">${row['price']:.2f}</div>
 
                   <div style="margin-top:6px;margin-bottom:6px">
                     {indicators_html}
@@ -580,9 +590,14 @@ else:
                   </div>
 
                   <div class="score">
-                    <span class="score-label">信号强度</span>
-                    <span class="{advice_class}">{advice_label}</span>
-                    {dots_html}
+                    <span class="score-label">7日信号</span>
+                    <span class="{adv7_class}">{adv7_text}</span>
+                    {adv7_dots}
+                  </div>
+                  <div class="score">
+                    <span class="score-label">30日信号</span>
+                    <span class="{adv30_class}">{adv30_text}</span>
+                    {adv30_dots}
                   </div>
                 </div>
                 """
@@ -591,5 +606,5 @@ else:
 st.caption(
     "数据来源：Yahoo Finance HTTP 接口，周期和回测区间基于上方选择（日线/4小时/1小时）。"
     "未来7日/30日盈利概率基于历史同类信号的统计结果，括号内为平均盈利、平均亏损和盈亏比（Profit Factor）。"
-    "仅作个人量化研究，不构成投资建议。"
+    "7日信号与30日信号分别给出买入/观望/卖出建议，仅作个人量化研究，不构成投资建议。"
 )
