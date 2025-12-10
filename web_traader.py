@@ -11,20 +11,18 @@ DEFAULT_STOCKS = ['QQQ', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA'
 HISTORY_YEARS = 3
 MIN_CONDITIONS_MET = 3
 
-# 忽略 pandas 在特定情况下的警告
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# --- 核心分析函数 (V7 - 加固版) ---
+# --- 核心分析函数 (V8 - 英文内核) ---
 def analyze_stock(ticker_symbol):
-    """分析单个股票，返回包含纯净数字的字典用于处理。"""
+    """分析单个股票，返回包含纯英文键的字典。"""
     try:
         stock = yf.Ticker(ticker_symbol)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=HISTORY_YEARS * 365)
-        # 使用 auto_adjust=True 自动调整数据，更稳定
         hist_data = stock.history(start=start_date, end=end_date, interval="1d", auto_adjust=True)
 
-        if hist_data.empty or len(hist_data) < 35:
+        if hist_data.empty or len(hist_data) < 40: # 确保有足够数据
             return None
 
         latest_price = hist_data['Close'].iloc[-1]
@@ -39,7 +37,6 @@ def analyze_stock(ticker_symbol):
         
         latest = hist_data.iloc[-1]
 
-        # 定义指标状态 (2=满足, 1=中性, 0=不满足)
         rsi_status = 2 if latest.get('RSI_14', 50) < 40 else 1 if 40 <= latest.get('RSI_14', 50) < 50 else 0
         macd_status = 2 if latest.get('MACD_12_26_9', 0) > latest.get('MACDs_12_26_9', -1) else 0
         bb_status = 2 if latest['Close'] < latest.get('BBL_20_2.0', float('inf')) else 1 if latest.get('BBL_20_2.0', float('inf')) <= latest['Close'] < latest.get('BBM_20_2.0', float('inf')) else 0
@@ -47,7 +44,6 @@ def analyze_stock(ticker_symbol):
         obv_mean = hist_data['OBV'].rolling(window=5).mean().iloc[-1]
         obv_status = 2 if latest.get('OBV', 0) > obv_mean else 0
 
-        # 回测盈利概率
         conditions_df = pd.DataFrame({
             'rsi_ok': hist_data['RSI_14'] < 40,
             'macd_ok': hist_data['MACD_12_26_9'] > hist_data['MACDs_12_26_9'],
@@ -72,13 +68,13 @@ def analyze_stock(ticker_symbol):
             prob_30d = (win_30d / signal_days) * 100
 
         return {
-            'id': ticker_symbol, '代码': ticker_symbol, '收盘价': latest_price,
-            '涨跌幅': price_change_percent, 'RSI': rsi_status, 'MACD': macd_status,
-            '布林带': bb_status, 'EMA': ema_status, 'OBV': obv_status,
-            '7日概率': prob_7d, '30日概率': prob_30d,
+            'ticker': ticker_symbol, 'price': latest_price,
+            'change_pct': price_change_percent, 'rsi': rsi_status, 'macd': macd_status,
+            'bbands': bb_status, 'ema': ema_status, 'obv': obv_status,
+            'prob_7d': prob_7d, 'prob_30d': prob_30d,
         }
     except Exception as e:
-        print(f"分析 {ticker_symbol} 时出错: {e}")
+        # print(f"分析 {ticker_symbol} 时出错: {e}") # 生产环境可以注释掉
         return None
 
 # --- Dash 应用定义 ---
@@ -88,7 +84,6 @@ server = app.server
 # --- 界面布局 ---
 app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', 'fontFamily': 'sans-serif'}, children=[
     html.H1("美股量化观察列表", style={'textAlign': 'center', 'color': '#4dabf7'}),
-    
     html.Div(className='row', style={'marginBottom': '20px', 'display': 'flex', 'alignItems': 'center'}, children=[
         html.Div(className='six columns', children=[
             dcc.Input(id='ticker-input', type='text', placeholder='输入股票代码...', style={'backgroundColor': '#333', 'color': '#fff', 'border': '1px solid #555', 'padding': '8px'}),
@@ -102,27 +97,29 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
     dcc.Loading(id="loading", type="default", children=[
         dash_table.DataTable(
             id='stock-table',
+            # 列定义：'name'是显示给用户的，'id'是内部用的英文ID
             columns=[
-                {'name': '代码', 'id': '代码'}, {'name': '收盘价', 'id': '收盘价'}, {'name': '涨跌幅', 'id': '涨跌幅'},
-                {'name': 'RSI', 'id': 'RSI'}, {'name': 'MACD', 'id': 'MACD'}, {'name': '布林带', 'id': '布林带'},
-                {'name': 'EMA', 'id': 'EMA'}, {'name': 'OBV', 'id': 'OBV'},
-                {'name': '7日概率', 'id': '7日概率'}, {'name': '30日概率', 'id': '30日概率'},
+                {'name': '代码', 'id': 'ticker_display'}, {'name': '收盘价', 'id': 'price_display'}, {'name': '涨跌幅', 'id': 'change_pct_display'},
+                {'name': 'RSI', 'id': 'rsi_display'}, {'name': 'MACD', 'id': 'macd_display'}, {'name': '布林带', 'id': 'bbands_display'},
+                {'name': 'EMA', 'id': 'ema_display'}, {'name': 'OBV', 'id': 'obv_display'},
+                {'name': '7日概率', 'id': 'prob_7d_display'}, {'name': '30日概率', 'id': 'prob_30d_display'},
             ],
             style_header={'backgroundColor': '#333', 'fontWeight': 'bold'},
             style_cell={'backgroundColor': '#1e1e1e', 'color': 'white', 'textAlign': 'center', 'border': '1px solid #333'},
+            # 条件格式化：filter_query使用纯英文的内部ID
             style_data_conditional=[
-                {'if': {'column_id': '涨跌幅', 'filter_query': '{涨跌幅_raw} > 0'}, 'color': '#4caf50'},
-                {'if': {'column_id': '涨跌幅', 'filter_query': '{涨跌幅_raw} < 0'}, 'color': '#f44336'},
-                *[{'if': {'column_id': c, 'filter_query': f'{{{c}_raw} = 2'}, 'color': '#4caf50', 'fontWeight': 'bold'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
-                *[{'if': {'column_id': c, 'filter_query': f'{{{c}_raw} = 1'}, 'color': '#ffeb3b'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
-                *[{'if': {'column_id': c, 'filter_query': f'{{{c}_raw} = 0'}, 'color': '#f44336'} for c in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']],
+                {'if': {'column_id': 'change_pct_display', 'filter_query': '{change_pct_raw} > 0'}, 'color': '#4caf50'},
+                {'if': {'column_id': 'change_pct_display', 'filter_query': '{change_pct_raw} < 0'}, 'color': '#f44336'},
+                *[{'if': {'column_id': f'{c}_display', 'filter_query': f'{{{c}_raw} = 2'}, 'color': '#4caf50', 'fontWeight': 'bold'} for c in ['rsi', 'macd', 'bbands', 'ema', 'obv']],
+                *[{'if': {'column_id': f'{c}_display', 'filter_query': f'{{{c}_raw} = 1'}, 'color': '#ffeb3b'} for c in ['rsi', 'macd', 'bbands', 'ema', 'obv']],
+                *[{'if': {'column_id': f'{c}_display', 'filter_query': f'{{{c}_raw} = 0'}, 'color': '#f44336'} for c in ['rsi', 'macd', 'bbands', 'ema', 'obv']],
             ]
         )
     ]),
     dcc.Store(id='stock-list-store', data=DEFAULT_STOCKS),
 ])
 
-# --- 交互逻辑 (Callback - V7 防御性编程) ---
+# --- 交互逻辑 (Callback - V8 终极版) ---
 @app.callback(Output('stock-list-store', 'data'), Input('add-btn', 'n_clicks'), [State('ticker-input', 'value'), State('stock-list-store', 'data')])
 def add_stock(n_clicks, ticker, stock_list):
     if n_clicks > 0 and ticker:
@@ -138,31 +135,30 @@ def update_table(stock_list, sort_value):
     if not valid_data:
         return []
 
-    # 先排序：使用 .get() 安全地获取值，如果不存在则使用0
     if sort_value == 'change_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('涨跌幅', 0.0), reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('change_pct', 0.0), reverse=True)
     elif sort_value == 'prob7d_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('7日概率', 0.0), reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('prob_7d', 0.0), reverse=True)
     elif sort_value == 'prob30d_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('30日概率', 0.0), reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('prob_30d', 0.0), reverse=True)
     else:
         sorted_data = valid_data
 
-    # 后格式化：同样使用 .get()，确保即使数据不完整也不会崩溃
     display_data = []
     for row in sorted_data:
         formatted_row = {
-            'id': row.get('id', ''),
-            '代码': row.get('代码', 'N/A'),
-            '收盘价': f"{row.get('收盘价', 0.0):.2f}",
-            '涨跌幅': f"{row.get('涨跌幅', 0.0):.2f}%",
-            '涨跌幅_raw': row.get('涨跌幅', 0.0), # 为条件格式化保留原始数字
-            '7日概率': f"{row.get('7日概率', 0.0):.2f}%",
-            '30日概率': f"{row.get('30日概率', 0.0):.2f}%",
+            'id': row.get('ticker'), # Dash table 内部需要一个id
+            'ticker_display': row.get('ticker'),
+            'price_display': f"{row.get('price', 0.0):.2f}",
+            'change_pct_display': f"{row.get('change_pct', 0.0):.2f}%",
+            'prob_7d_display': f"{row.get('prob_7d', 0.0):.2f}%",
+            'prob_30d_display': f"{row.get('prob_30d', 0.0):.2f}%",
+            # 为条件格式化添加纯英文的 _raw 后缀数据
+            'change_pct_raw': row.get('change_pct', 0.0),
         }
-        for col in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']:
-            formatted_row[col] = '●'
-            formatted_row[f'{col}_raw'] = row.get(col, 0) # 为条件格式化保留原始数字
+        for col_id in ['rsi', 'macd', 'bbands', 'ema', 'obv']:
+            formatted_row[f'{col_id}_display'] = '●'
+            formatted_row[f'{col_id}_raw'] = row.get(col_id, 0)
         
         display_data.append(formatted_row)
 
@@ -171,4 +167,3 @@ def update_table(stock_list, sort_value):
 # --- 运行应用 ---
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0')
-
