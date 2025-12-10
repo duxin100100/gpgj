@@ -1,99 +1,139 @@
-import streamlit as st
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 import yfinance as yf
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
+from ta.trend import MACD, EMAIndicator
+from ta.momentum import RSIIndicator
+from ta.volume import OnBalanceVolumeIndicator
+from ta.volatility import AverageTrueRange
+import uvicorn
 
-# ==========================================
-# 网页标题和布局
-# ==========================================
-st.set_page_config(page_title="小白量化助手", page_icon="📈")
-st.title("📈 美股趋势探测器")
-st.write("这是你的专属量化工具，输入代码即可分析！")
 
-# ==========================================
-# 1. 侧边栏：输入框和按钮
-# ==========================================
-with st.sidebar:
-    st.header("⚙️ 参数设置")
-    # 创建一个输入框，默认值是 TSLA
-    symbol = st.text_input("输入股票代码 (例如: AAPL, NVDA, BABA)", value="TSLA")
-    # 创建一个按钮
-    run_button = st.button("开始分析 🚀")
+app = FastAPI()
 
-# ==========================================
-# 2. 核心逻辑 (点击按钮后才运行)
-# ==========================================
-if run_button:
-    st.info(f"正在联网获取 {symbol} 的数据，请稍候...")
-    
-    # --- 原来的抓取和计算代码 ---
-    try:
-        data = yf.download(symbol, period="6mo", progress=False)
-        
-        # 数据清洗
-        if isinstance(data.columns, pd.MultiIndex):
-            data = data.xs('Close', axis=1, level=0, drop_level=False)
-            data.columns = ['Close']
-            
-        if data.empty:
-            st.error("❌ 找不到数据！请检查股票代码是否正确 (比如美股代码要是大写)。")
-            st.stop() # 停止运行
-            
-        # 计算 MACD
-        data['EMA_12'] = data['Close'].ewm(span=12, adjust=False).mean()
-        data['EMA_26'] = data['Close'].ewm(span=26, adjust=False).mean()
-        data['MACD'] = data['EMA_12'] - data['EMA_26']
-        data['Signal_Line'] = data['MACD'].ewm(span=9, adjust=False).mean()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
-        # 取最新数据
-        last_date = data.index[-1].strftime('%Y-%m-%d')
-        last_price = data.iloc[-1]['Close']
-        macd = data.iloc[-1]['MACD']
-        signal = data.iloc[-1]['Signal_Line']
-        
-        # --- 3. 在网页上展示结果 ---
-        st.success("✅ 分析完成！")
-        
-        # 显示大指标卡片
-        col1, col2, col3 = st.columns(3)
-        col1.metric("股票代码", symbol)
-        col2.metric("最新日期", last_date)
-        col3.metric("当前价格", f"${last_price:.2f}")
 
-        st.divider() # 分割线
+# ========== 数据与回测 ==========
+def load(symbol):
+    df = yf.download(symbol, period="3y", interval="1d").dropna()
+    return df if not df.empty else None
 
-        # 判断结论
-        if macd > signal:
-            st.header("🔥 结论：多头 (买入/持有)")
-            st.markdown("MACD线在信号线上方，**上涨动能较强**。")
-        else:
-            st.header("❄️ 结论：空头 (卖出/观望)")
-            st.markdown("MACD线在信号线下方，**下跌风险较大**。")
 
-        # --- 4. 画图 (这是网页版的强项) ---
-        st.subheader("📊 趋势图表")
-        
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-        
-        # 上图：股价
-        ax1.plot(data.index, data['Close'], label='Price', color='black')
-        ax1.set_title(f"{symbol} Price")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # 下图：MACD
-        ax2.plot(data.index, data['MACD'], label='MACD', color='red')
-        ax2.plot(data.index, data['Signal_Line'], label='Signal', color='blue')
-        # 画红绿柱子
-        bars = data['MACD'] - data['Signal_Line']
-        ax2.bar(data.index, bars, color=['red' if x > 0 else 'green' for x in bars], alpha=0.5)
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        # 把图表显示在网页上
-        st.pyplot(fig)
+def calc(df):
+    df["macd"] = MACD(df["Close"]).macd_diff()
+    df["rsi"] = RSIIndicator(df["Close"]).rsi()
+    df["ema8"] = EMAIndicator(df["Close"], window=8).ema_indicator()
+    df["ema21"] = EMAIndicator(df["Close"], window=21).ema_indicator()
+    df["atr"] = AverageTrueRange(df["High"], df["Low"], df["Close"]).average_true_range()
+    df["obv"] = OnBalanceVolumeIndicator(df["Close"], df["Volume"]).on_balance_volume()
+    df["atr20"] = df["atr"].rolling(20).mean()
+    df["obv20"] = df["obv"].rolling(20).mean()
+    df["vol20"] = df["Volume"].rolling(20).mean()
+    return df.dropna()
 
-    except Exception as e:
-        st.error(f"发生错误: {e}")
-else:
-    st.info("👈 请在左侧输入代码，点击按钮开始运行。")
+
+def signal(latest):
+    def status(val, high, low):
+        return "bull" if val>high else "bear" if val<low else "neutral"
+
+    return [
+        {"name":"MACD趋势", "status":"bull" if latest["macd"]>0 else "bear"},
+        {"name":"成交量", "status":status(latest["Volume"], latest["vol20"]*1.1, latest["vol20"]*0.9)},
+        {"name":"RSI",   "status":"bull" if latest["rsi"]>60 else "bear" if latest["rsi"]<40 else "neutral"},
+        {"name":"ATR波动", "status":status(latest["atr"], latest["atr20"]*1.1, latest["atr20"]*0.9)},
+        {"name":"OBV资金流", "status":status(latest["obv"], latest["obv20"]*1.05, latest["obv20"]*0.95)},
+    ]
+
+
+def backtest(df, days=7, base=3):
+    wins,total,rets=0,0,[]
+    for i in range(len(df)-days):
+        s=signal(df.iloc[i])
+        score=sum(1 for x in s if x["status"]=="bull")
+        if score>=base:
+            total+=1
+            r=(df["Close"].iloc[i+days]/df["Close"].iloc[i]-1)
+            rets.append(r)
+            if r>0:wins+=1
+    return (wins/total if total>0 else 0),(np.mean(rets) if rets else 0)
+
+
+# ====== API ======
+@app.get("/stock/{symbol}")
+def api(symbol:str):
+    s=symbol.upper()
+    df=load(s); 
+    if df is None: return {"error":"代码无效"}
+    df=calc(df)
+    latest=df.iloc[-1]
+    p7,a7=backtest(df,7)
+    p30,a30=backtest(df,30)
+
+    return {
+        "symbol":s,
+        "price":float(latest["Close"]),
+        "change":float((latest["Close"]/df["Close"].iloc[-2]-1)*100),
+        "prob7":round(p7,4),"avg7":round(a7,4),
+        "prob30":round(p30,4),"avg30":round(a30,4),
+        "indicators":signal(latest),
+        "score":sum(i["status"]=="bull" for i in signal(latest))
+    }
+
+
+# ====== 前端 UI 页面输出 ======
+@app.get("/",response_class=HTMLResponse)
+def ui():
+    return """
+<html>
+<head>
+<title>AI 量化看板</title>
+<style>
+body{background:#0e1014;color:#fff;font-family:-apple-system;margin:40px}
+input{padding:8px 12px;border-radius:6px;border:none;margin-right:8px}
+button{padding:8px 14px;border-radius:6px;border:none;background:#4f46e5;color:#fff}
+.card{background:#1a1d23;padding:16px;border-radius:10px;margin-top:14px;width:350px}
+.dot{width:10px;height:10px;border-radius:50%}
+.up{color:#4ade80}.down{color:#f87171}
+.bull{background:#4ade80}.neutral{background:#facc15}.bear{background:#fb7185}
+</style></head>
+<body>
+
+<h2>📈 AI 量化信号系统</h2>
+<input id="code" placeholder="输入股票 如 TSLA AAPL NVDA">
+<button onclick="load()">查询</button>
+
+<div id="list"></div>
+
+<script>
+async function load(){
+    let c=document.getElementById("code").value.toUpperCase()
+    let r=await fetch('/stock/'+c).then(r=>r.json())
+    if(r.error)return alert("股票不存在")
+    let ind=r.indicators.map(i=>`<div>
+        ${i.name} <span class="dot ${i.status}"></span></div>`).join("")
+    document.getElementById("list").innerHTML+=`
+    <div class='card'>
+        <h3>${r.symbol} <span class="${r.change>0?"up":"down"}">${r.change.toFixed(2)}%</span></h3>
+        <p>$${r.price.toFixed(2)}</p>
+        ${ind}
+        <p>7日盈利概率：${(r.prob7*100).toFixed(1)}%</p>
+        <p>30日盈利概率：${(r.prob30*100).toFixed(1)}%</p>
+        <p>信号强度：${r.score}/5</p>
+    </div>`
+}
+</script>
+</body></html>
+"""
+
+
+if __name__ == "__main__":
+    print("🚀 运行成功 → 打开浏览器访问：http://127.0.0.1:8000")
+    uvicorn.run(app,host="0.0.0.0",port=8000)
