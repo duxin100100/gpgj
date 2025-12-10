@@ -45,8 +45,32 @@ st.markdown(
     .prob-mid { color:#facc15; font-weight:600; }
     .prob-bad { color:#fb7185; font-weight:600; }
 
-    .score{font-size:11px;color:#9ca3af;margin-top:4px;}
-    .score span{color:#4ade80;margin-left:4px;}
+    .score{
+        font-size:12px;
+        color:#9ca3af;
+        margin-top:6px;
+        display:flex;
+        align-items:center;
+        gap:6px;
+    }
+    .score-label{
+        font-size:13px;
+        font-weight:600;
+        color:#e5e7eb;
+    }
+    .dot-score{
+        width:10px;
+        height:10px;
+        border-radius:50%;
+        display:inline-block;
+        margin-right:2px;
+    }
+    .dot-score-on{
+        background:#4ade80;
+    }
+    .dot-score-off{
+        background:#4b5563;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -292,7 +316,7 @@ def prob_class(p):
 
 # version 加上 years，强制新缓存
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, years: int, version: int = 4):
+def get_stock_metrics_cached(symbol: str, years: int, version: int = 5):
     return compute_stock_metrics(symbol, years=years)
 
 
@@ -324,9 +348,10 @@ with top_c3:
     )
 with top_c4:
     years_label = st.selectbox(
-        "回测区间",
+        "",
         ["1年", "2年", "3年", "5年", "10年"],
         index=2,
+        label_visibility="collapsed",   # 删除“回测区间”字样
     )
 
 years_map = {"1年": 1, "2年": 2, "3年": 3, "5年": 5, "10年": 10}
@@ -388,6 +413,15 @@ else:
                 signals30 = row.get("signals30", 0)
                 wins30 = row.get("wins30", 0)
 
+                # 信号强度五个点
+                score_val = int(row.get("score", 0))
+                filled = max(0, min(5, score_val))
+                empty = 5 - filled
+                dots_html = (
+                    "<span class='dot-score dot-score-on'></span>" * filled
+                    + "<span class='dot-score dot-score-off'></span>" * empty
+                )
+
                 html = f"""
                 <div class="card">
                   <div class="symbol-line">
@@ -410,10 +444,13 @@ else:
                     </div>
                   </div>
                   <div class="score">
-                    信号强度：<span>{row['score']}/5</span>
+                    <span class="score-label">信号强度</span>
+                    {dots_html}
                   </div>
                 </div>
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-st.caption("数据来源：Yahoo Finance HTTP 接口，回测区间基于所选年份，统计窗口约为该区间内的历史信号，仅作个人量化研究，不构成投资建议。")
+st.caption(
+    "数据来源：Yahoo Finance HTTP 接口，回测区间基于所选年份，统计窗口为该区间内的历史信号，仅作个人量化研究，不构成投资建议。"
+)
