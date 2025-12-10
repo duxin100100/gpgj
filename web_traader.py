@@ -14,14 +14,15 @@ MIN_CONDITIONS_MET = 3
 # 忽略 pandas 在特定情况下的警告
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# --- 核心分析函数 (V6 - 保持数据纯净) ---
+# --- 核心分析函数 (V7 - 加固版) ---
 def analyze_stock(ticker_symbol):
     """分析单个股票，返回包含纯净数字的字典用于处理。"""
     try:
         stock = yf.Ticker(ticker_symbol)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=HISTORY_YEARS * 365)
-        hist_data = stock.history(start=start_date, end=end_date, interval="1d")
+        # 使用 auto_adjust=True 自动调整数据，更稳定
+        hist_data = stock.history(start=start_date, end=end_date, interval="1d", auto_adjust=True)
 
         if hist_data.empty or len(hist_data) < 35:
             return None
@@ -71,13 +72,10 @@ def analyze_stock(ticker_symbol):
             prob_30d = (win_30d / signal_days) * 100
 
         return {
-            'id': ticker_symbol,
-            '代码': ticker_symbol,
-            '收盘价': latest_price,
-            '涨跌幅': price_change_percent,
-            'RSI': rsi_status, 'MACD': macd_status, '布林带': bb_status, 'EMA': ema_status, 'OBV': obv_status,
-            '7日概率': prob_7d,
-            '30日概率': prob_30d,
+            'id': ticker_symbol, '代码': ticker_symbol, '收盘价': latest_price,
+            '涨跌幅': price_change_percent, 'RSI': rsi_status, 'MACD': macd_status,
+            '布林带': bb_status, 'EMA': ema_status, 'OBV': obv_status,
+            '7日概率': prob_7d, '30日概率': prob_30d,
         }
     except Exception as e:
         print(f"分析 {ticker_symbol} 时出错: {e}")
@@ -85,9 +83,9 @@ def analyze_stock(ticker_symbol):
 
 # --- Dash 应用定义 ---
 app = dash.Dash(__name__, external_stylesheets=['https://codepen.io/chriddyp/pen/bWLwgP.css'])
-server = app.server # 用于gunicorn部署
+server = app.server
 
-# --- 界面布局 (完全用Python定义) ---
+# --- 界面布局 ---
 app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', 'fontFamily': 'sans-serif'}, children=[
     html.H1("美股量化观察列表", style={'textAlign': 'center', 'color': '#4dabf7'}),
     
@@ -97,35 +95,21 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
             html.Button('添加', id='add-btn', n_clicks=0, style={'marginLeft': '10px', 'backgroundColor': '#4dabf7', 'color': 'white', 'border': 'none', 'padding': '8px 12px'}),
         ]),
         html.Div(className='six columns', style={'textAlign': 'right'}, children=[
-            dcc.Dropdown(
-                id='sort-select',
-                options=[
-                    {'label': '默认', 'value': 'default'},
-                    {'label': '涨跌幅 (高到低)', 'value': 'change_desc'},
-                    {'label': '7日概率 (高到低)', 'value': 'prob7d_desc'},
-                    {'label': '30日概率 (高到低)', 'value': 'prob30d_desc'},
-                ],
-                value='default',
-                style={'width': '200px', 'display': 'inline-block'},
-                clearable=False
-            )
+            dcc.Dropdown(id='sort-select', options=[{'label': '默认', 'value': 'default'},{'label': '涨跌幅 (高到低)', 'value': 'change_desc'},{'label': '7日概率 (高到低)', 'value': 'prob7d_desc'},{'label': '30日概率 (高到低)', 'value': 'prob30d_desc'}], value='default', style={'width': '200px', 'display': 'inline-block'}, clearable=False)
         ])
     ]),
     
     dcc.Loading(id="loading", type="default", children=[
         dash_table.DataTable(
             id='stock-table',
-            # 定义列，但不在这里定义具体格式，格式化将在callback中完成
             columns=[
-                {'name': '代码', 'id': '代码'}, {'name': '收盘价', 'id': '收盘价'},
-                {'name': '涨跌幅', 'id': '涨跌幅'}, {'name': 'RSI', 'id': 'RSI'},
-                {'name': 'MACD', 'id': 'MACD'}, {'name': '布林带', 'id': '布林带'},
+                {'name': '代码', 'id': '代码'}, {'name': '收盘价', 'id': '收盘价'}, {'name': '涨跌幅', 'id': '涨跌幅'},
+                {'name': 'RSI', 'id': 'RSI'}, {'name': 'MACD', 'id': 'MACD'}, {'name': '布林带', 'id': '布林带'},
                 {'name': 'EMA', 'id': 'EMA'}, {'name': 'OBV', 'id': 'OBV'},
                 {'name': '7日概率', 'id': '7日概率'}, {'name': '30日概率', 'id': '30日概率'},
             ],
             style_header={'backgroundColor': '#333', 'fontWeight': 'bold'},
             style_cell={'backgroundColor': '#1e1e1e', 'color': 'white', 'textAlign': 'center', 'border': '1px solid #333'},
-            # 条件格式化，根据数字来决定颜色
             style_data_conditional=[
                 {'if': {'column_id': '涨跌幅', 'filter_query': '{涨跌幅_raw} > 0'}, 'color': '#4caf50'},
                 {'if': {'column_id': '涨跌幅', 'filter_query': '{涨跌幅_raw} < 0'}, 'color': '#f44336'},
@@ -135,17 +119,11 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
             ]
         )
     ]),
-    
     dcc.Store(id='stock-list-store', data=DEFAULT_STOCKS),
 ])
 
-# --- 交互逻辑 (Callback) ---
-@app.callback(
-    Output('stock-list-store', 'data'),
-    Input('add-btn', 'n_clicks'),
-    State('ticker-input', 'value'),
-    State('stock-list-store', 'data')
-)
+# --- 交互逻辑 (Callback - V7 防御性编程) ---
+@app.callback(Output('stock-list-store', 'data'), Input('add-btn', 'n_clicks'), [State('ticker-input', 'value'), State('stock-list-store', 'data')])
 def add_stock(n_clicks, ticker, stock_list):
     if n_clicks > 0 and ticker:
         ticker = ticker.upper().strip()
@@ -153,43 +131,38 @@ def add_stock(n_clicks, ticker, stock_list):
             return [ticker] + stock_list
     return stock_list
 
-@app.callback(
-    Output('stock-table', 'data'),
-    Input('stock-list-store', 'data'),
-    Input('sort-select', 'value')
-)
+@app.callback(Output('stock-table', 'data'), [Input('stock-list-store', 'data'), Input('sort-select', 'value')])
 def update_table(stock_list, sort_value):
-    # 1. 获取原始数据，并过滤掉所有None值
     raw_data = [analyze_stock(ticker) for ticker in stock_list]
     valid_data = [d for d in raw_data if d is not None]
+    if not valid_data:
+        return []
 
-    # 2. **先排序**：对纯净的数字进行排序
+    # 先排序：使用 .get() 安全地获取值，如果不存在则使用0
     if sort_value == 'change_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('涨跌幅', 0), reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('涨跌幅', 0.0), reverse=True)
     elif sort_value == 'prob7d_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('7日概率', 0), reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('7日概率', 0.0), reverse=True)
     elif sort_value == 'prob30d_desc':
-        sorted_data = sorted(valid_data, key=lambda x: x.get('30日概率', 0), reverse=True)
+        sorted_data = sorted(valid_data, key=lambda x: x.get('30日概率', 0.0), reverse=True)
     else:
         sorted_data = valid_data
 
-    # 3. **后格式化**：为表格显示准备最终数据
+    # 后格式化：同样使用 .get()，确保即使数据不完整也不会崩溃
     display_data = []
     for row in sorted_data:
-        # 复制一份以进行格式化，同时保留原始数字用于条件格式化
         formatted_row = {
-            'id': row['id'],
-            '代码': row['代码'],
-            '收盘价': f"{row['收盘价']:.2f}",
-            '涨跌幅': f"{row['涨跌幅']:.2f}%",
-            '涨跌幅_raw': row['涨跌幅'], # 保留原始数字
-            '7日概率': f"{row['7日概率']:.2f}%",
-            '30日概率': f"{row['30日概率']:.2f}%",
+            'id': row.get('id', ''),
+            '代码': row.get('代码', 'N/A'),
+            '收盘价': f"{row.get('收盘价', 0.0):.2f}",
+            '涨跌幅': f"{row.get('涨跌幅', 0.0):.2f}%",
+            '涨跌幅_raw': row.get('涨跌幅', 0.0), # 为条件格式化保留原始数字
+            '7日概率': f"{row.get('7日概率', 0.0):.2f}%",
+            '30日概率': f"{row.get('30日概率', 0.0):.2f}%",
         }
-        # 格式化指标列
         for col in ['RSI', 'MACD', '布林带', 'EMA', 'OBV']:
-            formatted_row[col] = '●' # 用圆点显示
-            formatted_row[f'{col}_raw'] = row[col] # 保留原始数字 0, 1, 2
+            formatted_row[col] = '●'
+            formatted_row[f'{col}_raw'] = row.get(col, 0) # 为条件格式化保留原始数字
         
         display_data.append(formatted_row)
 
@@ -197,5 +170,5 @@ def update_table(stock_list, sort_value):
 
 # --- 运行应用 ---
 if __name__ == '__main__':
-    # 监听所有网络接口，方便线上部署
     app.run_server(debug=True, host='0.0.0.0')
+
