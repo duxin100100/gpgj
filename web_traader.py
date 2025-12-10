@@ -1,3 +1,127 @@
+Skip to content
+Navigation Menu
+duxin100100
+gpgj
+
+Type / to search
+Code
+Issues
+Pull requests
+Actions
+Projects
+Wiki
+Security
+Insights
+Settings
+Files
+Go to file
+t
+requirements.txt
+web_traader.py
+gpgj
+/
+web_traader.py
+in
+main
+
+Edit
+
+Preview
+Indent mode
+
+Spaces
+Indent size
+
+4
+Line wrap mode
+
+No wrap
+Editing web_traader.py file contents
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -83,57 +207,7 @@ def api(symbol:str):
         "change":float((latest["Close"]/df["Close"].iloc[-2]-1)*100),
         "prob7":round(p7,4),"avg7":round(a7,4),
         "prob30":round(p30,4),"avg30":round(a30,4),
-        "indicators":signal(latest),
-        "score":sum(i["status"]=="bull" for i in signal(latest))
-    }
-
-
-# ====== 前端 UI 页面输出 ======
-@app.get("/",response_class=HTMLResponse)
-def ui():
-    return """
-<html>
-<head>
-<title>AI 量化看板</title>
-<style>
-body{background:#0e1014;color:#fff;font-family:-apple-system;margin:40px}
-input{padding:8px 12px;border-radius:6px;border:none;margin-right:8px}
-button{padding:8px 14px;border-radius:6px;border:none;background:#4f46e5;color:#fff}
-.card{background:#1a1d23;padding:16px;border-radius:10px;margin-top:14px;width:350px}
-.dot{width:10px;height:10px;border-radius:50%}
-.up{color:#4ade80}.down{color:#f87171}
-.bull{background:#4ade80}.neutral{background:#facc15}.bear{background:#fb7185}
-</style></head>
-<body>
-
-<h2>📈 AI 量化信号系统</h2>
-<input id="code" placeholder="输入股票 如 TSLA AAPL NVDA">
-<button onclick="load()">查询</button>
-
-<div id="list"></div>
-
-<script>
-async function load(){
-    let c=document.getElementById("code").value.toUpperCase()
-    let r=await fetch('/stock/'+c).then(r=>r.json())
-    if(r.error)return alert("股票不存在")
-    let ind=r.indicators.map(i=>`<div>
-        ${i.name} <span class="dot ${i.status}"></span></div>`).join("")
-    document.getElementById("list").innerHTML+=`
-    <div class='card'>
-        <h3>${r.symbol} <span class="${r.change>0?"up":"down"}">${r.change.toFixed(2)}%</span></h3>
-        <p>$${r.price.toFixed(2)}</p>
-        ${ind}
-        <p>7日盈利概率：${(r.prob7*100).toFixed(1)}%</p>
-        <p>30日盈利概率：${(r.prob30*100).toFixed(1)}%</p>
         <p>信号强度：${r.score}/5</p>
-    </div>`
-}
-</script>
-</body></html>
-"""
-
-
-if __name__ == "__main__":
-    print("🚀 运行成功 → 打开浏览器访问：http://127.0.0.1:8000")
-    uvicorn.run(app,host="0.0.0.0",port=8000)
+Use Control + Shift + m to toggle the tab key moving focus. Alternatively, use esc then tab to move to the next interactive element on the page.
+ 
+No spaces found. You can create a new space to get started.
