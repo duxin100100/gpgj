@@ -7,56 +7,51 @@ st.set_page_config(page_title="量化技术信号面板", layout="wide")
 st.markdown(
     """
     <style>
-    body { background: #05060a; }
-    .main { background: #05060a; }
+    body { background:#05060a; }
+    .main { background:#05060a; padding-top:10px !important; }
+
+    /* 🔥 标题缩小一倍 */
+    h1 { font-size:26px !important; font-weight:700 !important; margin-bottom:6px !important; }
+
     .card {
-        background: #14151d;
-        border-radius: 16px;
-        padding: 14px 16px 10px;
-        border: 1px solid #262736;
-        box-shadow: 0 18px 40px rgba(0,0,0,0.45);
-        margin-bottom: 12px;
-        color: #f5f5f7;
-        font-size: 13px;
+        background:#14151d;
+        border-radius:14px;
+        padding:14px 16px;
+        border:1px solid #262736;
+        box-shadow:0 18px 36px rgba(0,0,0,0.45);
+        color:#f5f5f7;
+        font-size:13px;
+        transition:0.15s;
     }
-    .symbol-line {
-        display: flex;
-        align-items: baseline;
-        gap: 8px;
-        font-size: 16px;
-        font-weight: 600;
+    .card:hover {
+        transform:translateY(-3px);
+        box-shadow:0 26px 48px rgba(0,0,0,0.6);
     }
-    .price {
-        font-size: 14px;
-        font-weight: 600;
-        color: #fefefe;
-        margin-top: 2px;
-    }
-    .change-up { color: #4ade80; font-size: 12px; font-weight: 500; }
-    .change-down { color: #fb7185; font-size: 12px; font-weight: 500; }
-    .dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        display: inline-block;
-        margin-left: 6px;
-    }
-    .dot-bull { background: #4ade80; }
-    .dot-neutral { background: #facc15; }
-    .dot-bear { background: #fb7185; }
-    .label { color: #9ca3af; }
-    .prob-good { color: #4ade80; font-weight:600; }
-    .prob-mid { color: #facc15; font-weight:600; }
-    .prob-bad { color: #fb7185; font-weight:600; }
-    .score { font-size: 11px; color: #9ca3af; margin-top: 4px; }
-    .score span { color: #4ade80; margin-left: 4px; }
+
+    .symbol-line { display:flex; gap:8px; font-size:15px; font-weight:600; }
+    .price { font-size:14px; margin-top:2px; }
+
+    .change-up { color:#4ade80; font-size:12px; }
+    .change-down { color:#fb7185; font-size:12px; }
+
+    .dot { width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:6px; }
+    .dot-bull { background:#4ade80; }
+    .dot-neutral { background:#facc15; }
+    .dot-bear { background:#fb7185; }
+
+    .label { color:#9ca3af; }
+    .prob-good { color:#4ade80; font-weight:600; }
+    .prob-mid { color:#facc15; font-weight:600; }
+    .prob-bad { color:#fb7185; font-weight:600; }
+
+    .score{font-size:11px;color:#9ca3af;margin-top:4px;}
+    .score span{color:#4ade80;margin-left:4px;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 st.title("📈 量化技术信号面板")
-st.write("默认展示：QQQ + 美股七姐妹，可在上方添加/置顶其它股票。")
 
 
 # ============ 通过 Yahoo HTTP API 获取数据 ============
@@ -280,7 +275,8 @@ default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TS
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
 
-top_c1, top_c2, top_c3 = st.columns([2, 1.5, 1])
+# 调整列宽：输入框 / 添加按钮 / 排序，对齐一行
+top_c1, top_c2, top_c3 = st.columns([2.8, 1.2, 1.3])
 
 with top_c1:
     new_symbol = st.text_input("输入股票代码添加到自选（例：TSLA）", value="", max_chars=10)
@@ -328,7 +324,7 @@ else:
     cols_per_row = 4
     for i in range(0, len(rows), cols_per_row):
         cols = st.columns(cols_per_row)
-        for col, row in zip(cols, rows[i : i + cols_per_row]):
+        for col, row in zip(cols, rows[i: i + cols_per_row]):
             with col:
                 change_class = "change-up" if row["change"] >= 0 else "change-down"
                 change_str = f"{row['change']:+.2f}%"
