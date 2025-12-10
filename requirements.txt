@@ -1,4 +1,5 @@
-streamlit
-yfinance
+dash
 pandas
-numpy
+yfinance
+pandas-ta
+gunicorn
