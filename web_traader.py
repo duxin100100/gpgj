@@ -57,134 +57,186 @@ st.markdown(
 )
 
 st.title("📈 量化技术信号面板")
+st.write("默认展示：QQQ + 美股七姐妹，可在上方添加/置顶其它股票。")
 
 
-# ============ 指标计算（不用 ta，全部自己算）===========
+# ============ numpy 实现的技术指标 ============
 
-def ema(series, span):
-    return series.ewm(span=span, adjust=False).mean()
+def ema_np(x: np.ndarray, span: int) -> np.ndarray:
+    alpha = 2 / (span + 1)
+    ema = np.zeros_like(x, dtype=float)
+    ema[0] = x[0]
+    for i in range(1, len(x)):
+        ema[i] = alpha * x[i] + (1 - alpha) * ema[i - 1]
+    return ema
 
-def macd_hist(close):
-    ema12 = ema(close, 12)
-    ema26 = ema(close, 26)
+
+def macd_hist_np(close: np.ndarray) -> np.ndarray:
+    ema12 = ema_np(close, 12)
+    ema26 = ema_np(close, 26)
     macd_line = ema12 - ema26
-    signal = ema(macd_line, 9)
+    signal = ema_np(macd_line, 9)
     return macd_line - signal
 
-def rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / (loss + 1e-9)
-    return 100 - (100 / (1 + rs))
 
-def atr(high, low, close, period=14):
-    prev_close = close.shift(1)
-    tr = pd.concat(
-        [
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs()
-        ],
-        axis=1
-    ).max(axis=1)
-    return tr.rolling(period).mean()
+def rsi_np(close: np.ndarray, period: int = 14) -> np.ndarray:
+    delta = np.diff(close, prepend=close[0])
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
 
-def obv(close, volume):
-    direction = np.sign(close.diff()).fillna(0)
-    return (direction * volume).cumsum()
+    gain_ema = np.zeros_like(gain)
+    loss_ema = np.zeros_like(loss)
+
+    alpha = 1 / period
+    gain_ema[0] = gain[0]
+    loss_ema[0] = loss[0]
+    for i in range(1, len(gain)):
+        gain_ema[i] = alpha * gain[i] + (1 - alpha) * gain_ema[i - 1]
+        loss_ema[i] = alpha * loss[i] + (1 - alpha) * loss_ema[i - 1]
+
+    rs = gain_ema / (loss_ema + 1e-9)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
 
-def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["macd_hist"] = macd_hist(df["Close"])
-    df["rsi"] = rsi(df["Close"])
-    df["atr"] = atr(df["High"], df["Low"], df["Close"])
-    df["obv"] = obv(df["Close"], df["Volume"])
+def atr_np(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    prev_close = np.roll(close, 1)
+    prev_close[0] = close[0]
+    tr1 = high - low
+    tr2 = np.abs(high - prev_close)
+    tr3 = np.abs(low - prev_close)
+    tr = np.maximum(tr1, np.maximum(tr2, tr3))
 
-    df["vol20"] = df["Volume"].rolling(20).mean()
-    df["atr20"] = df["atr"].rolling(20).mean()
-    df["obv20"] = df["obv"].rolling(20).mean()
-
-    # 信号列（0/1），用于回测时快速判断
-    df["sig_macd"] = (df["macd_hist"] > 0).astype(int)
-    df["sig_vol"] = (df["Volume"] > df["vol20"] * 1.1).astype(int)
-    df["sig_rsi"] = (df["rsi"] >= 60).astype(int)
-    df["sig_atr"] = (df["atr"] > df["atr20"] * 1.1).astype(int)
-    df["sig_obv"] = (df["obv"] > df["obv20"] * 1.05).astype(int)
-    df["score"] = (
-        df["sig_macd"]
-        + df["sig_vol"]
-        + df["sig_rsi"]
-        + df["sig_atr"]
-        + df["sig_obv"]
-    )
-
-    return df.dropna()
+    atr = np.zeros_like(tr)
+    atr[0] = tr[0]
+    alpha = 1 / period
+    for i in range(1, len(tr)):
+        atr[i] = alpha * tr[i] + (1 - alpha) * atr[i - 1]
+    return atr
 
 
-def indicator_status_from_row(row: pd.Series):
-    # 使用已经算好的信号列 + 均线，保证都是标量，不会再有 Series 冲突
+def rolling_mean_np(x: np.ndarray, window: int) -> np.ndarray:
+    """简单移动平均，用于 vol/atr/obv 均线"""
+    if len(x) < window:
+        return np.full_like(x, np.nan, dtype=float)
+    cumsum = np.cumsum(np.insert(x, 0, 0.0))
+    ma = (cumsum[window:] - cumsum[:-window]) / window
+    head = np.full(window - 1, ma[0])
+    return np.concatenate([head, ma])
+
+
+def obv_np(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
+    direction = np.sign(np.diff(close, prepend=close[0]))
+    return np.cumsum(direction * volume)
+
+
+# ============ 计算单只股票的所有指标 + 回测 ============
+
+def compute_stock_metrics(symbol: str):
+    # 下载历史数据并转成 numpy，彻底避免 pandas 对齐问题
+    df = yf.download(symbol, period="3y", interval="1d")
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna().reset_index(drop=True)
+
+    if df.empty:
+        raise ValueError("无历史数据")
+
+    close = df["Close"].to_numpy(dtype=float)
+    high = df["High"].to_numpy(dtype=float)
+    low = df["Low"].to_numpy(dtype=float)
+    vol = df["Volume"].to_numpy(dtype=float)
+
+    macd_hist = macd_hist_np(close)
+    rsi = rsi_np(close)
+    atr = atr_np(high, low, close)
+    obv = obv_np(close, vol)
+
+    vol_ma20 = rolling_mean_np(vol, 20)
+    atr_ma20 = rolling_mean_np(atr, 20)
+    obv_ma20 = rolling_mean_np(obv, 20)
+
+    # 信号（多头 =1，其他=0）
+    sig_macd = (macd_hist > 0).astype(int)
+    sig_vol = (vol > vol_ma20 * 1.1).astype(int)
+    sig_rsi = (rsi >= 60).astype(int)
+    sig_atr = (atr > atr_ma20 * 1.1).astype(int)
+    sig_obv = (obv > obv_ma20 * 1.05).astype(int)
+
+    score = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
+
+    # 回测：未来 N 日盈利概率
+    def backtest(days: int, min_score: int = 3):
+        wins = 0
+        total = 0
+        rets = []
+        for i in range(len(close) - days):
+            if score[i] >= min_score:
+                total += 1
+                r = close[i + days] / close[i] - 1.0
+                rets.append(r)
+                if r > 0:
+                    wins += 1
+        if total == 0:
+            return 0.0, 0.0
+        return wins / total, float(np.mean(rets))
+
+    prob7, avg7 = backtest(7)
+    prob30, avg30 = backtest(30)
+
+    # 当前最新值（最后一个元素）
+    last_close = close[-1]
+    prev_close = close[-2] if len(close) >= 2 else close[-1]
+    change_pct = (last_close / prev_close - 1.0) * 100
+    last_idx = -1
+
+    # 指标状态，用于 UI 打点
     indicators = []
 
-    macd_status = "bull" if row["sig_macd"] == 1 else "bear"
+    macd_status = "bull" if macd_hist[last_idx] > 0 else "bear"
     indicators.append({"name": "MACD 多头/空头", "status": macd_status})
 
-    if row["Volume"] > row["vol20"] * 1.1:
+    if vol[last_idx] > vol_ma20[last_idx] * 1.1:
         vol_status = "bull"
-    elif row["Volume"] < row["vol20"] * 0.9:
+    elif vol[last_idx] < vol_ma20[last_idx] * 0.9:
         vol_status = "bear"
     else:
         vol_status = "neutral"
     indicators.append({"name": "成交量相对20日均量", "status": vol_status})
 
-    if row["rsi"] >= 60:
+    if rsi[last_idx] >= 60:
         rsi_status = "bull"
-    elif row["rsi"] <= 40:
+    elif rsi[last_idx] <= 40:
         rsi_status = "bear"
     else:
         rsi_status = "neutral"
     indicators.append({"name": "RSI 区间", "status": rsi_status})
 
-    if row["atr"] > row["atr20"] * 1.1:
+    if atr[last_idx] > atr_ma20[last_idx] * 1.1:
         atr_status = "bull"
-    elif row["atr"] < row["atr20"] * 0.9:
+    elif atr[last_idx] < atr_ma20[last_idx] * 0.9:
         atr_status = "bear"
     else:
         atr_status = "neutral"
     indicators.append({"name": "ATR 波动率", "status": atr_status})
 
-    if row["obv"] > row["obv20"] * 1.05:
+    if obv[last_idx] > obv_ma20[last_idx] * 1.05:
         obv_status = "bull"
-    elif row["obv"] < row["obv20"] * 0.95:
+    elif obv[last_idx] < obv_ma20[last_idx] * 0.95:
         obv_status = "bear"
     else:
         obv_status = "neutral"
     indicators.append({"name": "OBV 资金趋势", "status": obv_status})
 
-    score = int(row["score"])
-    return indicators, score
-
-
-def backtest(df: pd.DataFrame, days: int = 7, min_score: int = 3):
-    close = df["Close"].values
-    scores = df["score"].values
-
-    wins = 0
-    total = 0
-    rets = []
-
-    for i in range(len(df) - days):
-        if scores[i] >= min_score:
-            total += 1
-            r = close[i + days] / close[i] - 1.0
-            rets.append(r)
-            if r > 0:
-                wins += 1
-
-    if total == 0:
-        return 0.0, 0.0
-    return wins / total, float(np.mean(rets))
+    return {
+        "symbol": symbol,
+        "price": float(last_close),
+        "change": float(change_pct),
+        "prob7": float(prob7),
+        "prob30": float(prob30),
+        "avg7": float(avg7),
+        "avg30": float(avg30),
+        "indicators": indicators,
+        "score": int(score[last_idx]),
+    }
 
 
 def prob_class(p):
@@ -196,35 +248,11 @@ def prob_class(p):
 
 
 @st.cache_data(show_spinner=False)
-def get_stock_metrics(symbol: str):
-    df = yf.download(symbol, period="3y", interval="1d").dropna()
-    if df.empty:
-        raise ValueError("无数据")
-    df = calc_indicators(df)
-    latest = df.iloc[-1]
-    prev_close = df["Close"].iloc[-2]
-    change_pct = (latest["Close"] / prev_close - 1.0) * 100
-
-    prob7, avg7 = backtest(df, 7)
-    prob30, avg30 = backtest(df, 30)
-    indicators, score = indicator_status_from_row(latest)
-
-    return {
-        "symbol": symbol,
-        "price": float(latest["Close"]),
-        "change": float(change_pct),
-        "prob7": float(prob7),
-        "prob30": float(prob30),
-        "avg7": float(avg7),
-        "avg30": float(avg30),
-        "indicators": indicators,
-        "score": int(score),
-    }
+def get_stock_metrics_cached(symbol: str):
+    return compute_stock_metrics(symbol)
 
 
 # ============ Streamlit 交互层：平铺 QQQ + 七姐妹 ============
-
-st.write("默认展示：QQQ + 美股七姐妹，可在上方添加/置顶其它股票。")
 
 default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
 if "watchlist" not in st.session_state:
@@ -254,7 +282,7 @@ rows = []
 for sym in st.session_state.watchlist:
     try:
         with st.spinner(f"载入 {sym} ..."):
-            metrics = get_stock_metrics(sym)
+            metrics = get_stock_metrics_cached(sym)
         rows.append(metrics)
     except Exception as e:
         st.warning(f"{sym} 加载失败：{e}")
@@ -269,9 +297,9 @@ elif sort_by == "30日盈利概率":
     rows.sort(key=lambda x: x["prob30"], reverse=True)
 elif sort_by == "信号强度":
     rows.sort(key=lambda x: x["score"], reverse=True)
-# 默认顺序就按 watchlist 的顺序（上面 append 时已保证）
+# 默认顺序就用 watchlist 的顺序
 
-# 平铺卡片（4 列网格，更接近你原来的UI）
+# 平铺卡片
 if not rows:
     st.info("暂无自选股票，请先在上方输入代码添加。")
 else:
