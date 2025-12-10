@@ -1,4 +1,7 @@
-streamlit
+fastapi
+uvicorn
 yfinance
 pandas
-matplotlib
+numpy
+ta
+python-multipart
