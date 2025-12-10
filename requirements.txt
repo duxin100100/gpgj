@@ -1,7 +1,5 @@
-fastapi
-uvicorn
+streamlit
 yfinance
 pandas
 numpy
 ta
-python-multipart
