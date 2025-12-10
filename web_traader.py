@@ -3,7 +3,7 @@ import requests
 import numpy as np
 
 # ============ 页面基础设置 ============
-st.set_page_config(page_title="量化技术信号面板", layout="wide")
+st.set_page_config(page_title="回测信号面板", layout="wide")
 st.markdown(
     """
     <style>
