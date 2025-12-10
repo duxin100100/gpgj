@@ -32,7 +32,7 @@ st.markdown(
         display:flex;
         gap:10px;
         align-items:baseline;
-        font-size:20px;  /* 整体放大一倍 */
+        font-size:20px;
         margin-bottom:2px;
     }
     .symbol-code {
@@ -43,6 +43,40 @@ st.markdown(
     }
     .change-up { color:#4ade80; font-size:16px; }
     .change-down { color:#fb7185; font-size:16px; }
+
+    .composite-line{
+        margin-top:2px;
+        margin-bottom:4px;
+        display:flex;
+        align-items:center;
+        gap:8px;
+        font-size:14px;
+    }
+    .composite-label{
+        color:#9ca3af;
+        font-weight:600;
+    }
+    .composite-badge{
+        padding:1px 10px;
+        border-radius:999px;
+        font-size:15px;
+        font-weight:800;
+    }
+    .composite-high{
+        background:rgba(34,197,94,0.1);
+        color:#4ade80;
+        border:1px solid rgba(34,197,94,0.6);
+    }
+    .composite-mid{
+        background:rgba(250,204,21,0.08);
+        color:#facc15;
+        border:1px solid rgba(250,204,21,0.6);
+    }
+    .composite-low{
+        background:rgba(248,113,113,0.08);
+        color:#fb7185;
+        border:1px solid rgba(248,113,113,0.6);
+    }
 
     .dot { width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:6px; }
     .dot-bull { background:#4ade80; }
@@ -255,6 +289,23 @@ def backtest_with_stats(close: np.ndarray, score: np.ndarray, steps: int, min_sc
     return win_rate, avg_ret, signals, max_dd, pf, wins, avg_win, avg_loss
 
 
+# ============ 综合评分 ============
+def composite_score(prob30: float, pf30: float) -> float:
+    """综合评分 = 30日胜率 * 100 + 30日PF * 20，限制在 0~100"""
+    score = prob30 * 100 + pf30 * 20
+    return max(0.0, min(100.0, score))
+
+
+def composite_class(score: float):
+    """根据综合评分返回样式类名"""
+    if score >= 85:
+        return "composite-high"
+    elif score >= 70:
+        return "composite-mid"
+    else:
+        return "composite-low"
+
+
 # ============ 计算单只股票 ============
 def compute_stock_metrics(symbol: str, cfg_key: str):
     cfg = BACKTEST_CONFIG[cfg_key]
@@ -277,17 +328,17 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
     sig_atr = (atr > atr_ma20 * 1.1).astype(int)
     sig_obv = (obv > obv_ma20 * 1.05).astype(int)
 
-    score = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
+    score_arr = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
 
     spd = cfg["steps_per_day"]
     steps7 = 7 * spd
     steps30 = 30 * spd
 
     prob7, avg7, signals7, max_dd7, pf7, wins7, avg_win7, avg_loss7 = backtest_with_stats(
-        close, score, steps=steps7
+        close, score_arr, steps=steps7
     )
     prob30, avg30, signals30, max_dd30, pf30, wins30, avg_win30, avg_loss30 = backtest_with_stats(
-        close, score, steps=steps30
+        close, score_arr, steps=steps30
     )
 
     last_close = close[-1]
@@ -363,6 +414,8 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
         "desc": f"1.05 / {obv_ratio:.2f}"
     })
 
+    comp = composite_score(prob30, pf30)
+
     return {
         "symbol": symbol,
         "price": float(last_close),
@@ -378,6 +431,7 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
         "avg_win30": float(avg_win30),
         "avg_loss30": float(avg_loss30),
         "indicators": indicators,
+        "composite": float(comp),
     }
 
 
@@ -389,7 +443,7 @@ def prob_class(p):
     return "prob-bad"
 
 
-# ============ 建议逻辑（共用，给 7日/30日 单独算） ============
+# ============ 建议逻辑（7日 / 30日 各自一套） ============
 def decide_advice(prob: float, pf: float):
     """
     返回: (label, intensity, color_class)
@@ -442,7 +496,7 @@ def decide_advice(prob: float, pf: float):
 
 # ============ 缓存 ============
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 8):
+def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 9):
     return compute_stock_metrics(symbol, cfg_key=cfg_key)
 
 
@@ -466,7 +520,7 @@ with top_c2:
 with top_c3:
     sort_by = st.selectbox(
         "",
-        ["默认顺序", "涨跌幅", "7日盈利概率", "30日盈利概率"],
+        ["默认顺序", "涨跌幅", "7日盈利概率", "30日盈利概率", "综合评分"],
         index=0,
         label_visibility="collapsed",
     )
@@ -500,6 +554,8 @@ elif sort_by == "7日盈利概率":
     rows.sort(key=lambda x: x["prob7"], reverse=True)
 elif sort_by == "30日盈利概率":
     rows.sort(key=lambda x: x["prob30"], reverse=True)
+elif sort_by == "综合评分":
+    rows.sort(key=lambda x: x["composite"], reverse=True)
 
 # ============ 卡片展示 ============
 if not rows:
@@ -524,6 +580,9 @@ else:
 
                 pf7 = row["pf7"]
                 pf30 = row["pf30"]
+
+                comp = row["composite"]
+                comp_class = composite_class(comp)
 
                 prob7_class = prob_class(row["prob7"])
                 prob30_class = prob_class(row["prob30"])
@@ -570,7 +629,12 @@ else:
                     <span class="{change_class}">{change_str}</span>
                   </div>
 
-                  <div style="margin-top:6px;margin-bottom:6px">
+                  <div class="composite-line">
+                    <span class="composite-label">综合评分</span>
+                    <span class="composite-badge {comp_class}">{comp:.0f}</span>
+                  </div>
+
+                  <div style="margin-top:4px;margin-bottom:6px">
                     {indicators_html}
                   </div>
 
@@ -606,5 +670,5 @@ else:
 st.caption(
     "数据来源：Yahoo Finance HTTP 接口，周期和回测区间基于上方选择（日线/4小时/1小时）。"
     "未来7日/30日盈利概率基于历史同类信号的统计结果，括号内为平均盈利、平均亏损和盈亏比（Profit Factor）。"
-    "7日信号与30日信号分别给出买入/观望/卖出建议，仅作个人量化研究，不构成投资建议。"
+    "综合评分由 30日胜率与30日盈亏比共同计算，仅作个人量化研究，不构成投资建议。"
 )
