@@ -13,7 +13,7 @@ MIN_CONDITIONS_MET = 3
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# --- 核心分析函数 (V8 - 英文内核) ---
+# --- 核心分析函数 (V9 - 保持V8的英文内核) ---
 def analyze_stock(ticker_symbol):
     """分析单个股票，返回包含纯英文键的字典。"""
     try:
@@ -22,7 +22,7 @@ def analyze_stock(ticker_symbol):
         start_date = end_date - timedelta(days=HISTORY_YEARS * 365)
         hist_data = stock.history(start=start_date, end=end_date, interval="1d", auto_adjust=True)
 
-        if hist_data.empty or len(hist_data) < 40: # 确保有足够数据
+        if hist_data.empty or len(hist_data) < 40:
             return None
 
         latest_price = hist_data['Close'].iloc[-1]
@@ -73,8 +73,7 @@ def analyze_stock(ticker_symbol):
             'bbands': bb_status, 'ema': ema_status, 'obv': obv_status,
             'prob_7d': prob_7d, 'prob_30d': prob_30d,
         }
-    except Exception as e:
-        # print(f"分析 {ticker_symbol} 时出错: {e}") # 生产环境可以注释掉
+    except Exception:
         return None
 
 # --- Dash 应用定义 ---
@@ -97,7 +96,6 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
     dcc.Loading(id="loading", type="default", children=[
         dash_table.DataTable(
             id='stock-table',
-            # 列定义：'name'是显示给用户的，'id'是内部用的英文ID
             columns=[
                 {'name': '代码', 'id': 'ticker_display'}, {'name': '收盘价', 'id': 'price_display'}, {'name': '涨跌幅', 'id': 'change_pct_display'},
                 {'name': 'RSI', 'id': 'rsi_display'}, {'name': 'MACD', 'id': 'macd_display'}, {'name': '布林带', 'id': 'bbands_display'},
@@ -106,7 +104,6 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
             ],
             style_header={'backgroundColor': '#333', 'fontWeight': 'bold'},
             style_cell={'backgroundColor': '#1e1e1e', 'color': 'white', 'textAlign': 'center', 'border': '1px solid #333'},
-            # 条件格式化：filter_query使用纯英文的内部ID
             style_data_conditional=[
                 {'if': {'column_id': 'change_pct_display', 'filter_query': '{change_pct_raw} > 0'}, 'color': '#4caf50'},
                 {'if': {'column_id': 'change_pct_display', 'filter_query': '{change_pct_raw} < 0'}, 'color': '#f44336'},
@@ -119,7 +116,7 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': '#e0e0e0', '
     dcc.Store(id='stock-list-store', data=DEFAULT_STOCKS),
 ])
 
-# --- 交互逻辑 (Callback - V8 终极版) ---
+# --- 交互逻辑 (Callback - V9 终极版) ---
 @app.callback(Output('stock-list-store', 'data'), Input('add-btn', 'n_clicks'), [State('ticker-input', 'value'), State('stock-list-store', 'data')])
 def add_stock(n_clicks, ticker, stock_list):
     if n_clicks > 0 and ticker:
@@ -146,14 +143,13 @@ def update_table(stock_list, sort_value):
 
     display_data = []
     for row in sorted_data:
+        # V9 核心改动：不再创建 'id' 键，让Dash自己处理
         formatted_row = {
-            'id': row.get('ticker'), # Dash table 内部需要一个id
             'ticker_display': row.get('ticker'),
             'price_display': f"{row.get('price', 0.0):.2f}",
             'change_pct_display': f"{row.get('change_pct', 0.0):.2f}%",
             'prob_7d_display': f"{row.get('prob_7d', 0.0):.2f}%",
             'prob_30d_display': f"{row.get('prob_30d', 0.0):.2f}%",
-            # 为条件格式化添加纯英文的 _raw 后缀数据
             'change_pct_raw': row.get('change_pct', 0.0),
         }
         for col_id in ['rsi', 'macd', 'bbands', 'ema', 'obv']:
@@ -167,3 +163,4 @@ def update_table(stock_list, sort_value):
 # --- 运行应用 ---
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0')
+
