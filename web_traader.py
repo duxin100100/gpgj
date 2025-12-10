@@ -78,14 +78,32 @@ st.markdown(
 
 st.title("📈 量化技术信号面板")
 
-# ============ 通过 Yahoo HTTP API 获取数据 ============
+# ============ 时间框架定义 ============
+# key -> (range, base_interval, agg)
+# base_interval 是请求 Yahoo 的 interval
+# agg 是在本地聚合的 bar 数（4 小时 = 4 根 1 小时）
+TIMEFRAMES = {
+    "1年":  ("1y",  "1d", 1),
+    "2年":  ("2y",  "1d", 1),
+    "3年":  ("3y",  "1d", 1),
+    "5年":  ("5y",  "1d", 1),
+    "10年": ("10y", "1d", 1),
+    "3月/4小时": ("3mo", "1h", 4),
+    "6月/4小时": ("6mo", "1h", 4),
+    "3月/1小时": ("3mo", "1h", 1),
+    "6月/1小时": ("6mo", "1h", 1),
+}
 
-YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval=1d"
+YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}"
 
 
-def fetch_yahoo_ohlcv(symbol: str, years: int):
-    range_str = f"{years}y"
-    url = YAHOO_URL.format(symbol=symbol, range=range_str)
+def fetch_yahoo_ohlcv(symbol: str, tf_key: str):
+    """根据时间框架获取并（必要时）聚合 OHLCV 数据"""
+    if tf_key not in TIMEFRAMES:
+        raise ValueError("未知时间框架")
+
+    range_str, base_interval, agg = TIMEFRAMES[tf_key]
+    url = YAHOO_URL.format(symbol=symbol, range=range_str, interval=base_interval)
     resp = requests.get(
         url,
         headers={"User-Agent": "Mozilla/5.0"},
@@ -103,7 +121,7 @@ def fetch_yahoo_ohlcv(symbol: str, years: int):
     low = np.array(quote["low"], dtype="float64")
     volume = np.array(quote["volume"], dtype="float64")
 
-    # 有些点为 None → 变成 nan；统一按 close 的有效位置做掩码
+    # 先按 close 的有效值做掩码
     mask = ~np.isnan(close)
     close = close[mask]
     high = high[mask]
@@ -112,6 +130,20 @@ def fetch_yahoo_ohlcv(symbol: str, years: int):
 
     if len(close) < 80:
         raise ValueError("可用历史数据太少")
+
+    # 如果需要 4 小时，就把 1 小时数据聚合
+    if agg > 1:
+        step = agg
+        usable = (len(close) // step) * step
+        close = close[-usable:]
+        high = high[-usable:]
+        low = low[-usable:]
+        volume = volume[-usable:]
+
+        close = close.reshape(-1, step)[:, -1]              # 最后一根收盘
+        high = high.reshape(-1, step).max(axis=1)           # 区间最高
+        low = low.reshape(-1, step).min(axis=1)             # 区间最低
+        volume = volume.reshape(-1, step).sum(axis=1)       # 区间成交量
 
     return close, high, low, volume
 
@@ -223,8 +255,8 @@ def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_sco
 
 # ============ 计算单只股票 ============
 
-def compute_stock_metrics(symbol: str, years: int):
-    close, high, low, volume = fetch_yahoo_ohlcv(symbol, years=years)
+def compute_stock_metrics(symbol: str, tf_key: str):
+    close, high, low, volume = fetch_yahoo_ohlcv(symbol, tf_key=tf_key)
 
     macd_hist = macd_hist_np(close)
     rsi = rsi_np(close)
@@ -243,6 +275,7 @@ def compute_stock_metrics(symbol: str, years: int):
 
     score = sig_macd + sig_vol + sig_rsi + sig_atr + sig_obv
 
+    # “7 天 / 30 天” 在小时级里其实就是 7 个 / 30 个 bar
     prob7, avg7, signals7, max_dd7, _, wins7 = backtest_with_stats(close, score, days=7)
     prob30, avg30, signals30, _, _, wins30 = backtest_with_stats(close, score, days=30)
 
@@ -314,10 +347,10 @@ def prob_class(p):
     return "prob-bad"
 
 
-# version 加上 years，强制新缓存
+# version 加上 time frame key，强制新缓存
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, years: int, version: int = 5):
-    return compute_stock_metrics(symbol, years=years)
+def get_stock_metrics_cached(symbol: str, tf_key: str, version: int = 6):
+    return compute_stock_metrics(symbol, tf_key=tf_key)
 
 
 # ============ Streamlit 交互层 ============
@@ -326,8 +359,8 @@ default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TS
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
 
-# 输入框 / 添加按钮 / 排序 / 回测区间
-top_c1, top_c2, top_c3, top_c4 = st.columns([2.4, 1.1, 1.1, 1.1])
+# 输入框 / 添加按钮 / 排序 / 回测时间框架
+top_c1, top_c2, top_c3, top_c4 = st.columns([2.4, 1.1, 1.1, 1.3])
 
 with top_c1:
     new_symbol = st.text_input(
@@ -344,18 +377,15 @@ with top_c3:
         "",
         ["默认顺序", "涨跌幅", "7日盈利概率", "30日盈利概率", "信号强度"],
         index=0,
-        label_visibility="collapsed",   # 删除“排序方式”字样
+        label_visibility="collapsed",
     )
 with top_c4:
-    years_label = st.selectbox(
+    tf_label = st.selectbox(
         "",
-        ["1年", "2年", "3年", "5年", "10年"],
-        index=2,
-        label_visibility="collapsed",   # 删除“回测区间”字样
+        list(TIMEFRAMES.keys()),
+        index=2,  # 默认 3 年 日线
+        label_visibility="collapsed",
     )
-
-years_map = {"1年": 1, "2年": 2, "3年": 3, "5年": 5, "10年": 10}
-backtest_years = years_map[years_label]
 
 if add_btn and new_symbol.strip():
     sym = new_symbol.strip().upper()
@@ -368,7 +398,7 @@ rows = []
 for sym in st.session_state.watchlist:
     try:
         with st.spinner(f"载入 {sym} ..."):
-            metrics = get_stock_metrics_cached(sym, years=backtest_years)
+            metrics = get_stock_metrics_cached(sym, tf_key=tf_label)
         rows.append(metrics)
     except Exception as e:
         st.warning(f"{sym} 加载失败：{e}")
@@ -452,5 +482,6 @@ else:
                 st.markdown(html, unsafe_allow_html=True)
 
 st.caption(
-    "数据来源：Yahoo Finance HTTP 接口，回测区间基于所选年份，统计窗口为该区间内的历史信号，仅作个人量化研究，不构成投资建议。"
+    "数据来源：Yahoo Finance HTTP 接口，时间框架基于右侧下拉选项（日线 / 小时线），"
+    "回测窗口为该周期内的历史信号，仅作个人量化研究，不构成投资建议。"
 )
