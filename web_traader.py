@@ -159,7 +159,7 @@ def obv_np(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
     return np.cumsum(direction * volume)
 
 
-# ============ 计算单只股票的指标 + 回测 ============
+# ============ 回测相关函数 ============
 
 def backtest_with_stats(close: np.ndarray, score: np.ndarray, days: int, min_score: int = 3):
     """返回：胜率、平均收益、信号次数、最大回撤、盈亏比"""
@@ -208,6 +208,8 @@ def choose_best_holding(close: np.ndarray, score: np.ndarray, horizons=None, min
             best_day = d
     return best_day
 
+
+# ============ 计算单只股票的指标 + 回测 ============
 
 def compute_stock_metrics(symbol: str):
     close, high, low, volume = fetch_yahoo_ohlcv(symbol)
@@ -303,8 +305,9 @@ def prob_class(p):
     return "prob-bad"
 
 
+# 用 version 参数强制区分新旧缓存
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str):
+def get_stock_metrics_cached(symbol: str, version: int = 2):
     return compute_stock_metrics(symbol)
 
 
@@ -339,6 +342,7 @@ rows = []
 for sym in st.session_state.watchlist:
     try:
         with st.spinner(f"载入 {sym} ..."):
+            # version=2 保证走新的缓存空间
             metrics = get_stock_metrics_cached(sym)
         rows.append(metrics)
     except Exception as e:
@@ -379,12 +383,12 @@ else:
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
-                # 新增：回测统计信息
-                signals7 = row["signals7"]
-                avg7 = row["avg7"] * 100
-                max_dd7 = row["max_dd7"] * 100
-                pf7 = row["pf7"]
-                best_hold = row["best_holding"]
+                # 新增：回测统计信息（用 get 防止 KeyError）
+                signals7 = row.get("signals7", 0)
+                avg7 = row.get("avg7", 0.0) * 100
+                max_dd7 = row.get("max_dd7", 0.0) * 100
+                pf7 = row.get("pf7", 0.0)
+                best_hold = row.get("best_holding", 0)
 
                 stats_lines = []
                 stats_lines.append(f"7日信号次数：{signals7} 次")
