@@ -595,3 +595,29 @@ for idx, row in enumerate(rows):
             st.markdown(html_btn7, unsafe_allow_html=True)
 
         # 30 日信号 + 原生弹窗按钮
+        s30_c1, s30_c2, s30_c3, s30_c4 = st.columns([1.4, 1.8, 2.8, 0.7])
+        with s30_c1:
+            st.markdown('<span class="signal-label">30日信号</span>', unsafe_allow_html=True)
+        with s30_c2:
+            cls2 = (
+                "signal-adv-buy"
+                if row["adv30_kind"] == "buy"
+                else "signal-adv-sell"
+                if row["adv30_kind"] == "sell"
+                else "signal-adv-hold"
+            )
+            st.markdown(
+                f'<span class="{cls2}">{row["adv30_label"]}</span>',
+                unsafe_allow_html=True,
+            )
+        with s30_c3:
+            st.markdown(dots(row["adv30_intensity"], row["adv30_kind"]))
+        with s30_c4:
+            txt30 = build_signal_explanation(row, 30, lookback_label)
+            alert30 = txt30.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+            html_btn30 = f"""
+            <button class="arrow-html-btn" onclick="alert('{alert30}')">›</button>
+            """
+            st.markdown(html_btn30, unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
