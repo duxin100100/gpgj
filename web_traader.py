@@ -492,11 +492,35 @@ n_cols = 3
 cols = st.columns(n_cols)
 
 for idx, row in enumerate(rows):
+    # 兼容：如果 row 是 Series / DataFrame 行，就先转成 dict
+    if isinstance(row, (pd.Series, dict)) is False:
+        row = dict(row)
+    elif isinstance(row, pd.Series):
+        row = row.to_dict()
+
     col = cols[idx % n_cols]
     with col:
         st.markdown('<div class="stock-card">', unsafe_allow_html=True)
 
-        chg_cls = "stock-chg-pos" if row["pct_chg"] >= 0 else "stock-chg-neg"
+        pct_val = float(row["pct_chg"])
+        chg_cls = "stock-chg-pos" if pct_val >= 0 else "stock-chg-neg"
+
+        chg_html_class = "stock-chg-pos" if pct_val >= 0 else "stock-chg-neg"
+
+        st.markdown(
+            f"""
+            <div>
+              <span class="stock-title">{row['symbol']}</span>
+              <span class="stock-price">${row['price']:.2f}</span>
+              <span class="{chg_html_class}">{pct_val:+.2f}%</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # 后面这一大段 MACD / 成交量 / RSI ... 以及 7日&30日信号的代码都保持不变
+        ...
+
         st.markdown(
             f"""
             <div>
