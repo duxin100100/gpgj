@@ -15,7 +15,7 @@ st.markdown(
     .card {
         background:#14151d;
         border-radius:14px;
-        padding:14px 16px;
+        padding:14px 16px 12px;
         border:1px solid #262736;
         box-shadow:0 18px 36px rgba(0,0,0,0.45);
         color:#f5f5f7;
@@ -28,32 +28,60 @@ st.markdown(
         box-shadow:0 26px 48px rgba(0,0,0,0.6);
     }
 
-.symbol-line {
+    .card-section {
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-end;
+        gap:10px;
+    }
+    .section-divider {
+        border-bottom:1px solid #1f2030;
+        margin:10px 0;
+    }
+
+    .symbol-line {
         display:flex;
         gap:10px;
-        align-items:baseline;
-        font-size:20px;
+        align-items:center;
+        font-size:19px;
         margin-bottom:2px;
     }
-    .symbol-code { font-weight:800; }
     .symbol-name { font-weight:800; }
     .symbol-ticker {
-        font-size:13px;
+        font-size:12px;
         color:#9ca3af;
         padding:2px 6px;
         border:1px solid #262736;
         border-radius:10px;
+        background:#0d0e13;
     }
     .symbol-price {
-        font-size:20px;
+        font-size:19px;
     }
-    .change-up { color:#4ade80; font-size:16px; }
-    .change-down { color:#fb7185; font-size:16px; }
+    .change-up { color:#4ade80; font-size:14px; }
+    .change-down { color:#fb7185; font-size:14px; }
 
-    .dot { width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:6px; }
-    .dot-bull { background:#4ade80; }
-    .dot-neutral { background:#facc15; }
-    .dot-bear { background:#fb7185; }
+    .indicator-grid {
+        display:grid;
+        grid-template-columns:repeat(5,minmax(0,1fr));
+        gap:6px 10px;
+        margin-top:4px;
+    }
+    .indicator-item {
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        background:#191b27;
+        border:1px solid #202233;
+        border-radius:10px;
+        padding:6px 8px;
+        font-size:12px;
+        color:#d4d4d8;
+    }
+    .dot { width:8px;height:8px;border-radius:2px;display:inline-block;margin-left:6px; }
+    .dot-bull { background:#4ade80; box-shadow:0 0 0 1px rgba(74,222,128,0.25); }
+    .dot-neutral { background:#facc15; box-shadow:0 0 0 1px rgba(250,204,21,0.25); }
+    .dot-bear { background:#fb7185; box-shadow:0 0 0 1px rgba(251,113,133,0.25); }
 
     .label { color:#9ca3af; }
     .prob-good { color:#4ade80; font-weight:600; }
@@ -63,7 +91,7 @@ st.markdown(
     .score{
         font-size:12px;
         color:#9ca3af;
-        margin-top:6px;
+        margin-top:8px;
         display:flex;
         align-items:center;
         gap:8px;
@@ -72,11 +100,11 @@ st.markdown(
         font-size:13px;
         font-weight:700;
         color:#e5e7eb;
-        min-width:64px;
+        min-width:70px;
     }
     .dot-score{
-        width:10px;
-        height:10px;
+        width:9px;
+        height:9px;
         border-radius:50%;
         display:inline-block;
         margin-right:2px;
@@ -613,7 +641,7 @@ else:
                     else:
                         line = ind["name"]
                     indicators_html += (
-                        f"<div class='label'>{line}"
+                        f"<div class='indicator-item'><span>{line}</span>"
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
@@ -649,31 +677,43 @@ else:
 
                 html = f"""
                 <div class="card">
-                  <div class="symbol-line">
-                    <span class="symbol-name">{display_name}</span>
-                    <span class="symbol-ticker">{ticker_label}</span>
-                    <span class="symbol-price">${row['price']:.2f}</span>
-                    <span class="{change_class}">{change_str}</span>
+                  <div class="card-section">
+                    <div class="symbol-line">
+                      <span class="symbol-name">{display_name}</span>
+                      <span class="symbol-ticker">{ticker_label}</span>
+                    </div>
+                    <div class="card-section" style="gap:6px;align-items:center;">
+                      <span class="symbol-price">${row['price']:.2f}</span>
+                      <span class="{change_class}">{change_str}</span>
+                    </div>
                   </div>
 
-                  <div style="margin-top:4px;margin-bottom:6px">
+                  <div class="section-divider"></div>
+
+                  <div class="indicator-grid">
                     {indicators_html}
                   </div>
 
-                  <div style="border-bottom:1px dashed #262736;margin:6px 0 6px;"></div>
+                  <div class="section-divider"></div>
 
                   <div>
-                    <div>
-                      <span class="label">7日盈利概率</span>
-                      <span class="{prob7_class}"> {prob7_pct:.1f}%</span>
-                      <span class="label"> (均盈 {avg_win7_pct:+.1f}%&nbsp;&nbsp;均亏 {avg_loss7_pct:+.1f}%&nbsp;&nbsp;盈亏 {pf7:.2f})</span>
+                    <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;">
+                      <div>
+                        <span class="label">7日盈利概率</span>
+                        <span class="{prob7_class}"> {prob7_pct:.1f}%</span>
+                      </div>
+                      <div class="label">均盈 {avg_win7_pct:+.1f}% / 均亏 {avg_loss7_pct:+.1f}% / 盈亏 {pf7:.2f}</div>
                     </div>
-                    <div>
-                      <span class="label">30日盈利概率</span>
-                      <span class="{prob30_class}"> {prob30_pct:.1f}%</span>
-                      <span class="label"> (均盈 {avg_win30_pct:+.1f}%&nbsp;&nbsp;均亏 {avg_loss30_pct:+.1f}%&nbsp;&nbsp;盈亏 {pf30:.2f})</span>
+                    <div style="display:flex;justify-content:space-between;gap:8px;">
+                      <div>
+                        <span class="label">30日盈利概率</span>
+                        <span class="{prob30_class}"> {prob30_pct:.1f}%</span>
+                      </div>
+                      <div class="label">均盈 {avg_win30_pct:+.1f}% / 均亏 {avg_loss30_pct:+.1f}% / 盈亏 {pf30:.2f}</div>
                     </div>
                   </div>
+
+                  <div class="section-divider"></div>
 
                   <div class="score">
                     <span class="score-label">7日信号</span>
