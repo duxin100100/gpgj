@@ -15,7 +15,7 @@ st.markdown(
     .card {
         background:#14151d;
         border-radius:14px;
-        padding:14px 16px;
+        padding:14px 16px 12px;
         border:1px solid #262736;
         box-shadow:0 18px 36px rgba(0,0,0,0.45);
         color:#f5f5f7;
@@ -28,26 +28,60 @@ st.markdown(
         box-shadow:0 26px 48px rgba(0,0,0,0.6);
     }
 
+    .card-section {
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-end;
+        gap:10px;
+    }
+    .section-divider {
+        border-bottom:1px solid #1f2030;
+        margin:10px 0;
+    }
+
     .symbol-line {
         display:flex;
         gap:10px;
-        align-items:baseline;
-        font-size:20px;
+        align-items:center;
+        font-size:19px;
         margin-bottom:2px;
     }
-    .symbol-code {
-        font-weight:800;
+    .symbol-name { font-weight:800; }
+    .symbol-ticker {
+        font-size:12px;
+        color:#9ca3af;
+        padding:2px 6px;
+        border:1px solid #262736;
+        border-radius:10px;
+        background:#0d0e13;
     }
     .symbol-price {
-        font-size:20px;
+        font-size:19px;
     }
-    .change-up { color:#4ade80; font-size:16px; }
-    .change-down { color:#fb7185; font-size:16px; }
+    .change-up { color:#4ade80; font-size:14px; }
+    .change-down { color:#fb7185; font-size:14px; }
 
-    .dot { width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:6px; }
-    .dot-bull { background:#4ade80; }
-    .dot-neutral { background:#facc15; }
-    .dot-bear { background:#fb7185; }
+    .indicator-grid {
+        display:grid;
+        grid-template-columns:repeat(5,minmax(0,1fr));
+        gap:6px 10px;
+        margin-top:4px;
+    }
+    .indicator-item {
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        background:#191b27;
+        border:1px solid #202233;
+        border-radius:10px;
+        padding:6px 8px;
+        font-size:12px;
+        color:#d4d4d8;
+    }
+    .dot { width:8px;height:8px;border-radius:2px;display:inline-block;margin-left:6px; }
+    .dot-bull { background:#4ade80; box-shadow:0 0 0 1px rgba(74,222,128,0.25); }
+    .dot-neutral { background:#facc15; box-shadow:0 0 0 1px rgba(250,204,21,0.25); }
+    .dot-bear { background:#fb7185; box-shadow:0 0 0 1px rgba(251,113,133,0.25); }
 
     .label { color:#9ca3af; }
     .prob-good { color:#4ade80; font-weight:600; }
@@ -57,7 +91,7 @@ st.markdown(
     .score{
         font-size:12px;
         color:#9ca3af;
-        margin-top:6px;
+        margin-top:8px;
         display:flex;
         align-items:center;
         gap:8px;
@@ -66,11 +100,11 @@ st.markdown(
         font-size:13px;
         font-weight:700;
         color:#e5e7eb;
-        min-width:64px;
+        min-width:70px;
     }
     .dot-score{
-        width:10px;
-        height:10px;
+        width:9px;
+        height:9px;
         border-radius:50%;
         display:inline-block;
         margin-right:2px;
@@ -100,13 +134,73 @@ BACKTEST_CONFIG = {
     "3年":  {"range": "3y",  "interval": "1d", "steps_per_day": 1},
     "5年":  {"range": "5y",  "interval": "1d", "steps_per_day": 1},
     "10年": {"range": "10y", "interval": "1d", "steps_per_day": 1},
-    "3月/4小时": {"range": "3mo", "interval": "4h", "steps_per_day": 6},
-    "6月/4小时": {"range": "6mo", "interval": "4h", "steps_per_day": 6},
-    "3月/1小时": {"range": "3mo", "interval": "1h", "steps_per_day": 24},
-    "6月/1小时": {"range": "6mo", "interval": "1h", "steps_per_day": 24},
 }
 
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}"
+
+
+def format_symbol_for_yahoo(symbol: str) -> str:
+    """Normalize user input to a Yahoo Finance ticker.
+
+    - A股常见 6 位代码会自动根据前缀补全 .SS 或 .SZ 后缀
+    - 其他情况保持用户输入的大写
+    """
+
+    sym = symbol.strip().upper()
+    if not sym:
+        raise ValueError("股票代码不能为空")
+
+    if sym.isdigit() and len(sym) == 6:
+        if sym.startswith(("600", "601", "603", "605", "688")):
+            return f"{sym}.SS"  # 上交所
+        if sym.startswith(("000", "001", "002", "003", "300")):
+            return f"{sym}.SZ"  # 深交所
+
+    return sym
+
+
+@st.cache_data(show_spinner=False)
+def fetch_display_name(symbol: str, yahoo_symbol: str) -> str:
+    """获取用于展示的名称，优先返回 A 股中文名。"""
+
+    clean_sym = symbol.strip()
+
+    # A 股走东财接口拿中文名（SH=1, SZ=0）
+    if clean_sym.isdigit() and len(clean_sym) == 6:
+        market_code = "1" if yahoo_symbol.endswith(".SS") else "0"
+        try:
+            resp = requests.get(
+                "https://push2.eastmoney.com/api/qt/stock/get",
+                params={"secid": f"{market_code}.{clean_sym}", "fields": "f58,f57"},
+                headers={"Referer": "https://quote.eastmoney.com"},
+                timeout=8,
+            )
+            data = resp.json()
+            name = data.get("data", {}).get("f58")
+            if name:
+                return name
+        except Exception:
+            pass
+
+    # 兜底走 Yahoo quote 接口
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            params={"symbols": yahoo_symbol},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        quote = resp.json().get("quoteResponse", {}).get("result", [])
+        if quote:
+            info = quote[0]
+            for key in ("longName", "shortName", "displayName", "symbol"):
+                name = info.get(key)
+                if name:
+                    return name
+    except Exception:
+        pass
+
+    return yahoo_symbol
 
 
 def fetch_yahoo_ohlcv(symbol: str, range_str: str, interval: str):
@@ -317,8 +411,10 @@ def decide_advice(prob: float, pf: float):
 # ============ 计算单只股票（使用上一根完整K线） ============
 def compute_stock_metrics(symbol: str, cfg_key: str):
     cfg = BACKTEST_CONFIG[cfg_key]
+    yahoo_symbol = format_symbol_for_yahoo(symbol)
+    display_name = fetch_display_name(symbol, yahoo_symbol)
     close, high, low, volume = fetch_yahoo_ohlcv(
-        symbol, range_str=cfg["range"], interval=cfg["interval"]
+        yahoo_symbol, range_str=cfg["range"], interval=cfg["interval"]
     )
 
     # 丢掉最后一根「可能还没走完」的K线
@@ -431,7 +527,8 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
     })
 
     return {
-        "symbol": symbol,
+        "symbol": yahoo_symbol,
+        "display_name": display_name,
         "price": float(last_close),
         "change": float(change_pct),
         "prob7": float(prob7),
@@ -467,7 +564,7 @@ with top_c1:
         "",
         value="",
         max_chars=10,
-        placeholder="输入股票代码添加到自选（例：TSLA）",
+        placeholder="输入股票代码添加到自选（例：TSLA 或 600519）",
         label_visibility="collapsed",
     )
 with top_c2:
@@ -544,7 +641,7 @@ else:
                     else:
                         line = ind["name"]
                     indicators_html += (
-                        f"<div class='label'>{line}"
+                        f"<div class='indicator-item'><span>{line}</span>"
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
@@ -575,32 +672,48 @@ else:
                     adv30_label, adv30_intensity, adv30_kind
                 )
 
+                display_name = row.get("display_name", row["symbol"])
+                ticker_label = row["symbol"]
+
                 html = f"""
                 <div class="card">
-                  <div class="symbol-line">
-                    <span class="symbol-code">{row['symbol']}</span>
-                    <span class="symbol-price">${row['price']:.2f}</span>
-                    <span class="{change_class}">{change_str}</span>
+                  <div class="card-section">
+                    <div class="symbol-line">
+                      <span class="symbol-name">{display_name}</span>
+                      <span class="symbol-ticker">{ticker_label}</span>
+                    </div>
+                    <div class="card-section" style="gap:6px;align-items:center;">
+                      <span class="symbol-price">${row['price']:.2f}</span>
+                      <span class="{change_class}">{change_str}</span>
+                    </div>
                   </div>
 
-                  <div style="margin-top:4px;margin-bottom:6px">
+                  <div class="section-divider"></div>
+
+                  <div class="indicator-grid">
                     {indicators_html}
                   </div>
 
-                  <div style="border-bottom:1px dashed #262736;margin:6px 0 6px;"></div>
+                  <div class="section-divider"></div>
 
                   <div>
-                    <div>
-                      <span class="label">7日盈利概率</span>
-                      <span class="{prob7_class}"> {prob7_pct:.1f}%</span>
-                      <span class="label"> (均盈 {avg_win7_pct:+.1f}%&nbsp;&nbsp;均亏 {avg_loss7_pct:+.1f}%&nbsp;&nbsp;盈亏 {pf7:.2f})</span>
+                    <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;">
+                      <div>
+                        <span class="label">7日盈利概率</span>
+                        <span class="{prob7_class}"> {prob7_pct:.1f}%</span>
+                      </div>
+                      <div class="label">均盈 {avg_win7_pct:+.1f}% / 均亏 {avg_loss7_pct:+.1f}% / 盈亏 {pf7:.2f}</div>
                     </div>
-                    <div>
-                      <span class="label">30日盈利概率</span>
-                      <span class="{prob30_class}"> {prob30_pct:.1f}%</span>
-                      <span class="label"> (均盈 {avg_win30_pct:+.1f}%&nbsp;&nbsp;均亏 {avg_loss30_pct:+.1f}%&nbsp;&nbsp;盈亏 {pf30:.2f})</span>
+                    <div style="display:flex;justify-content:space-between;gap:8px;">
+                      <div>
+                        <span class="label">30日盈利概率</span>
+                        <span class="{prob30_class}"> {prob30_pct:.1f}%</span>
+                      </div>
+                      <div class="label">均盈 {avg_win30_pct:+.1f}% / 均亏 {avg_loss30_pct:+.1f}% / 盈亏 {pf30:.2f}</div>
                     </div>
                   </div>
+
+                  <div class="section-divider"></div>
 
                   <div class="score">
                     <span class="score-label">7日信号</span>
