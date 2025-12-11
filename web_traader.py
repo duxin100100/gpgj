@@ -79,7 +79,7 @@ st.markdown(
         font-size:12px;
         color:#d4d4d8;
     }
-    .dot { width:8px;height:8px;border-radius:2px;display:inline-block;margin-left:6px; }
+    .dot { width:6px;height:6px;border-radius:2px;display:inline-block;margin-left:6px; }
     .dot-bull { background:#4ade80; box-shadow:0 0 0 1px rgba(74,222,128,0.25); }
     .dot-neutral { background:#facc15; box-shadow:0 0 0 1px rgba(250,204,21,0.25); }
     .dot-bear { background:#fb7185; box-shadow:0 0 0 1px rgba(251,113,133,0.25); }
@@ -121,6 +121,7 @@ st.markdown(
     .advice-buy{ color:#4ade80; }
     .advice-hold{ color:#facc15; }
     .advice-sell{ color:#fb7185; }
+    .profit-row { font-size:12px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -130,6 +131,8 @@ st.title("回测信号面板")
 
 # ============ 回测配置（日线+4H+1H） ============
 BACKTEST_CONFIG = {
+    "3个月": {"range": "3mo", "interval": "1d", "steps_per_day": 1},
+    "6个月": {"range": "6mo", "interval": "1d", "steps_per_day": 1},
     "1年":  {"range": "1y",  "interval": "1d", "steps_per_day": 1},
     "2年":  {"range": "2y",  "interval": "1d", "steps_per_day": 1},
     "3年":  {"range": "3y",  "interval": "1d", "steps_per_day": 1},
@@ -569,7 +572,7 @@ with top_c1:
         label_visibility="collapsed",
     )
 with top_c2:
-    add_btn = st.button("➕ 添加/置顶")
+    add_btn = st.button("查询")
 with top_c3:
     sort_by = st.selectbox(
         "",
@@ -581,7 +584,7 @@ with top_c4:
     mode_label = st.selectbox(
         "",
         list(BACKTEST_CONFIG.keys()),
-        index=2,
+        index=4,
         label_visibility="collapsed",
     )
 
@@ -698,14 +701,14 @@ else:
                   <div class="section-divider"></div>
 
                   <div>
-                    <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;">
+                    <div class="profit-row" style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;">
                       <div>
                         <span class="label">7日盈利概率</span>
                         <span class="{prob7_class}"> {prob7_pct:.1f}%</span>
                       </div>
                       <div class="label">均盈 {avg_win7_pct:+.1f}% / 均亏 {avg_loss7_pct:+.1f}% / 盈亏 {pf7:.2f}</div>
                     </div>
-                    <div style="display:flex;justify-content:space-between;gap:8px;">
+                    <div class="profit-row" style="display:flex;justify-content:space-between;gap:8px;">
                       <div>
                         <span class="label">30日盈利概率</span>
                         <span class="{prob30_class}"> {prob30_pct:.1f}%</span>
