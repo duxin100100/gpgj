@@ -131,6 +131,8 @@ st.title("回测信号面板")
 
 # ============ 回测配置（日线+4H+1H） ============
 BACKTEST_CONFIG = {
+    "3个月": {"range": "3mo", "interval": "1d", "steps_per_day": 1},
+    "6个月": {"range": "6mo", "interval": "1d", "steps_per_day": 1},
     "1年":  {"range": "1y",  "interval": "1d", "steps_per_day": 1},
     "6个月": {"range": "6mo", "interval": "1d", "steps_per_day": 1},
     "2年":  {"range": "2y",  "interval": "1d", "steps_per_day": 1},
