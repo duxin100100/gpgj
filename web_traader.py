@@ -100,10 +100,7 @@ BACKTEST_CONFIG = {
     "3年":  {"range": "3y",  "interval": "1d", "steps_per_day": 1},
     "5年":  {"range": "5y",  "interval": "1d", "steps_per_day": 1},
     "10年": {"range": "10y", "interval": "1d", "steps_per_day": 1},
-    "3月/4小时": {"range": "3mo", "interval": "4h", "steps_per_day": 6},
-    "6月/4小时": {"range": "6mo", "interval": "4h", "steps_per_day": 6},
-    "3月/1小时": {"range": "3mo", "interval": "1h", "steps_per_day": 24},
-    "6月/1小时": {"range": "6mo", "interval": "1h", "steps_per_day": 24},
+
 }
 
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}"
