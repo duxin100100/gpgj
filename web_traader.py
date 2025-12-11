@@ -106,6 +106,26 @@ BACKTEST_CONFIG = {
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}"
 
 
+def format_symbol_for_yahoo(symbol: str) -> str:
+    """Normalize user input to a Yahoo Finance ticker.
+
+    - A股常见 6 位代码会自动根据前缀补全 .SS 或 .SZ 后缀
+    - 其他情况保持用户输入的大写
+    """
+
+    sym = symbol.strip().upper()
+    if not sym:
+        raise ValueError("股票代码不能为空")
+
+    if sym.isdigit() and len(sym) == 6:
+        if sym.startswith(("600", "601", "603", "605", "688")):
+            return f"{sym}.SS"  # 上交所
+        if sym.startswith(("000", "001", "002", "003", "300")):
+            return f"{sym}.SZ"  # 深交所
+
+    return sym
+
+
 def fetch_yahoo_ohlcv(symbol: str, range_str: str, interval: str):
     url = YAHOO_URL.format(symbol=symbol, range=range_str, interval=interval)
     resp = requests.get(
@@ -314,8 +334,9 @@ def decide_advice(prob: float, pf: float):
 # ============ 计算单只股票（使用上一根完整K线） ============
 def compute_stock_metrics(symbol: str, cfg_key: str):
     cfg = BACKTEST_CONFIG[cfg_key]
+    yahoo_symbol = format_symbol_for_yahoo(symbol)
     close, high, low, volume = fetch_yahoo_ohlcv(
-        symbol, range_str=cfg["range"], interval=cfg["interval"]
+        yahoo_symbol, range_str=cfg["range"], interval=cfg["interval"]
     )
 
     # 丢掉最后一根「可能还没走完」的K线
@@ -428,7 +449,7 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
     })
 
     return {
-        "symbol": symbol,
+        "symbol": yahoo_symbol,
         "price": float(last_close),
         "change": float(change_pct),
         "prob7": float(prob7),
@@ -464,7 +485,7 @@ with top_c1:
         "",
         value="",
         max_chars=10,
-        placeholder="输入股票代码添加到自选（例：TSLA）",
+        placeholder="输入股票代码添加到自选（例：TSLA 或 600519）",
         label_visibility="collapsed",
     )
 with top_c2:
