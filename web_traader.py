@@ -205,6 +205,30 @@ def search_eastmoney_symbol(query: str):
     return None
 
 
+@st.cache_data(show_spinner=False)
+def search_yahoo_symbol_by_name(query: str):
+    """使用 Yahoo Finance 搜索接口用中文模糊匹配 A 股代码。"""
+
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v1/finance/search",
+            params={"q": query, "quotes_count": 10, "news_count": 0},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        data = resp.json()
+        for item in data.get("quotes", []):
+            symbol = item.get("symbol", "")
+            if not (symbol.endswith(".SS") or symbol.endswith(".SZ")):
+                continue
+            name = item.get("shortname") or item.get("longname") or item.get("exchDisp")
+            return symbol.replace(".SS", "").replace(".SZ", ""), name, ""
+    except Exception:
+        return None
+
+    return None
+
+
 def resolve_user_input_symbol(user_input: str) -> str:
     raw = user_input.strip()
     if not raw:
@@ -217,6 +241,9 @@ def resolve_user_input_symbol(user_input: str) -> str:
         result = search_eastmoney_symbol(raw)
         if result:
             return result[0]
+        yahoo_hit = search_yahoo_symbol_by_name(raw)
+        if yahoo_hit:
+            return yahoo_hit[0]
         raise ValueError("未找到匹配的 A 股代码，请改用 6 位代码或美股代码")
 
     return raw.upper()
@@ -610,12 +637,28 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
 
 # ============ 缓存 ============
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 12):
-    # version 改成 12，强制刷新缓存
+def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 13):
+    # version 改成 13，强制刷新缓存
     return compute_stock_metrics(symbol, cfg_key=cfg_key)
 
 
 # ============ Streamlit 交互层 ============
+def add_symbol_from_input():
+    raw_val = st.session_state.get("new_symbol_input", "")
+    if not raw_val.strip():
+        return
+    try:
+        sym = resolve_user_input_symbol(raw_val)
+    except ValueError as e:
+        st.warning(str(e))
+        return
+
+    if sym in st.session_state.watchlist:
+        st.session_state.watchlist.remove(sym)
+    st.session_state.watchlist.insert(0, sym)
+    st.session_state.new_symbol_input = ""
+
+
 default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
@@ -629,6 +672,8 @@ with top_c1:
         max_chars=10,
         placeholder="输入股票代码或中文名（例：TSLA / 600519 / 贵州茅台）",
         label_visibility="collapsed",
+        key="new_symbol_input",
+        on_change=add_symbol_from_input,
     )
 with top_c2:
     add_btn = st.button("查询")
@@ -647,15 +692,8 @@ with top_c4:
         label_visibility="collapsed",
     )
 
-if add_btn and new_symbol.strip():
-    try:
-        sym = resolve_user_input_symbol(new_symbol)
-    except ValueError as e:
-        st.warning(str(e))
-    else:
-        if sym in st.session_state.watchlist:
-            st.session_state.watchlist.remove(sym)
-        st.session_state.watchlist.insert(0, sym)
+if add_btn:
+    add_symbol_from_input()
 
 rows = []
 for sym in st.session_state.watchlist:
