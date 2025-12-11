@@ -685,7 +685,7 @@ with top_c1:
         "",
         value="",
         max_chars=10,
-        placeholder="输入股票代码或中文名（例：TSLA / 600519 / 贵州茅台）",
+        placeholder="输入股票代码（例：TSLA / 600519 ）",
         label_visibility="collapsed",
         key="new_symbol_input",
         on_change=add_symbol_from_input,
