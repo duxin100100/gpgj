@@ -1,3 +1,5 @@
+import json
+
 import streamlit as st
 import requests
 import numpy as np
@@ -15,7 +17,7 @@ st.markdown(
     .card {
         background:#14151d;
         border-radius:14px;
-        padding:14px 16px;
+        padding:14px 16px 12px;
         border:1px solid #262736;
         box-shadow:0 18px 36px rgba(0,0,0,0.45);
         color:#f5f5f7;
@@ -28,26 +30,61 @@ st.markdown(
         box-shadow:0 26px 48px rgba(0,0,0,0.6);
     }
 
+    .card-section {
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-end;
+        gap:10px;
+    }
+    .section-divider {
+        border-bottom:1px solid #1f2030;
+        margin:10px 0;
+    }
+
     .symbol-line {
         display:flex;
         gap:10px;
-        align-items:baseline;
-        font-size:20px;
+        align-items:center;
+        font-size:19px;
         margin-bottom:2px;
     }
-    .symbol-code {
-        font-weight:800;
+    .symbol-name { font-weight:800; }
+    .symbol-ticker {
+        font-size:12px;
+        color:#9ca3af;
+        padding:2px 6px;
+        border:1px solid #262736;
+        border-radius:10px;
+        background:#0d0e13;
     }
     .symbol-price {
-        font-size:20px;
+        font-size:19px;
     }
-    .change-up { color:#4ade80; font-size:16px; }
-    .change-down { color:#fb7185; font-size:16px; }
+    .change-up { color:#4ade80; font-size:14px; }
+    .change-down { color:#fb7185; font-size:14px; }
 
-    .dot { width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:6px; }
-    .dot-bull { background:#4ade80; }
-    .dot-neutral { background:#facc15; }
-    .dot-bear { background:#fb7185; }
+    .indicator-grid {
+        display:flex;
+        flex-direction:column;
+        gap:8px;
+        margin-top:4px;
+    }
+    .indicator-item {
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        width:100%;
+        background:#191b27;
+        border:1px solid #202233;
+        border-radius:10px;
+        padding:8px 10px;
+        font-size:12px;
+        color:#d4d4d8;
+    }
+    .dot { width:6px;height:6px;border-radius:2px;display:inline-block;margin-left:6px; }
+    .dot-bull { background:#4ade80; box-shadow:0 0 0 1px rgba(74,222,128,0.25); }
+    .dot-neutral { background:#facc15; box-shadow:0 0 0 1px rgba(250,204,21,0.25); }
+    .dot-bear { background:#fb7185; box-shadow:0 0 0 1px rgba(251,113,133,0.25); }
 
     .label { color:#9ca3af; }
     .prob-good { color:#4ade80; font-weight:600; }
@@ -57,7 +94,7 @@ st.markdown(
     .score{
         font-size:12px;
         color:#9ca3af;
-        margin-top:6px;
+        margin-top:8px;
         display:flex;
         align-items:center;
         gap:8px;
@@ -66,11 +103,11 @@ st.markdown(
         font-size:13px;
         font-weight:700;
         color:#e5e7eb;
-        min-width:64px;
+        min-width:70px;
     }
     .dot-score{
-        width:10px;
-        height:10px;
+        width:9px;
+        height:9px;
         border-radius:50%;
         display:inline-block;
         margin-right:2px;
@@ -86,7 +123,32 @@ st.markdown(
     .advice-buy{ color:#4ade80; }
     .advice-hold{ color:#facc15; }
     .advice-sell{ color:#fb7185; }
+    .profit-row { font-size:11px; }
+
+    /* 交互层 */
+    .card { position:relative; overflow:hidden; }
+    .card-layer { transition:opacity 0.25s ease; }
+    .layer-hidden { opacity:0; pointer-events:none; position:absolute; inset:12px 16px 12px 16px; }
+    .layer-active { opacity:1; pointer-events:auto; }
+
+    .indicator-item { cursor:pointer; }
+
+    .chart-view { display:flex; flex-direction:column; gap:12px; }
+    .chart-header { display:flex; align-items:center; gap:10px; }
+    .chart-title { font-size:15px; font-weight:700; }
+    .chart-subtitle { font-size:12px; color:#9ca3af; }
+    .chart-body { background:#0d0e14; border:1px solid #1f2030; border-radius:12px; padding:10px; }
+    .back-btn { background:#11121a; border:1px solid #2a2b3c; color:#e5e7eb; border-radius:8px; padding:6px 10px; cursor:pointer; transition:0.15s; }
+    .back-btn:hover { background:#181a24; }
+    canvas { background:transparent; }
     </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     """,
     unsafe_allow_html=True,
 )
@@ -94,19 +156,173 @@ st.markdown(
 st.title("回测信号面板")
 
 # ============ 回测配置（日线+4H+1H） ============
+BACKTEST_OPTIONS = ["1年", "6个月", "2年", "3年", "5年", "10年"]
 BACKTEST_CONFIG = {
     "1年":  {"range": "1y",  "interval": "1d", "steps_per_day": 1},
+    "6个月": {"range": "6mo", "interval": "1d", "steps_per_day": 1},
     "2年":  {"range": "2y",  "interval": "1d", "steps_per_day": 1},
     "3年":  {"range": "3y",  "interval": "1d", "steps_per_day": 1},
     "5年":  {"range": "5y",  "interval": "1d", "steps_per_day": 1},
     "10年": {"range": "10y", "interval": "1d", "steps_per_day": 1},
-    "3月/4小时": {"range": "3mo", "interval": "4h", "steps_per_day": 6},
-    "6月/4小时": {"range": "6mo", "interval": "4h", "steps_per_day": 6},
-    "3月/1小时": {"range": "3mo", "interval": "1h", "steps_per_day": 24},
-    "6月/1小时": {"range": "6mo", "interval": "1h", "steps_per_day": 24},
 }
 
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}"
+
+
+def format_symbol_for_yahoo(symbol: str) -> str:
+    """Normalize user input to a Yahoo Finance ticker.
+
+    - A股常见 6 位代码会自动根据前缀补全 .SS 或 .SZ 后缀
+    - 其他情况保持用户输入的大写
+    """
+
+    sym = symbol.strip().upper()
+    if not sym:
+        raise ValueError("股票代码不能为空")
+
+    if sym.isdigit() and len(sym) == 6:
+        if sym.startswith(("600", "601", "603", "605", "688")):
+            return f"{sym}.SS"  # 上交所
+        if sym.startswith(("000", "001", "002", "003", "300")):
+            return f"{sym}.SZ"  # 深交所
+
+    return sym
+
+
+def contains_chinese(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def search_eastmoney_symbol(query: str):
+    """尝试用东财模糊搜索中文名称，返回 (代码, 名称, 市场) 或 None。"""
+
+    try:
+        resp = requests.get(
+            "https://searchapi.eastmoney.com/api/suggest/get",
+            params={
+                "input": query,
+                "type": "14",
+                "token": "BD5FB5E653E986E07EED55F0F9F3CD9D",
+                "format": "json",
+                "count": 10,
+            },
+            headers={"Referer": "https://www.eastmoney.com"},
+            timeout=10,
+        )
+        data = resp.json()
+        table = data.get("QuotationCodeTable") or data.get("Data") or {}
+        records = (
+            table.get("Data")
+            or table.get("data")
+            or data.get("items")
+            or []
+        )
+        for rec in records:
+            code = rec.get("Code") or rec.get("code")
+            name = rec.get("Name") or rec.get("name")
+            market = str(rec.get("Market") or rec.get("market") or "")
+            if code and len(code) == 6 and market in {"0", "1"}:
+                return code, name, market
+    except Exception:
+        return None
+
+    return None
+
+
+def search_yahoo_symbol_by_name(query: str):
+    """使用 Yahoo Finance 搜索接口用中文模糊匹配 A 股代码。"""
+
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v1/finance/search",
+            params={
+                "q": query,
+                "quotes_count": 15,
+                "news_count": 0,
+                "lang": "zh-Hans",
+                "region": "HK",
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        data = resp.json()
+        for item in data.get("quotes", []):
+            symbol = item.get("symbol", "")
+            if not (symbol.endswith(".SS") or symbol.endswith(".SZ")):
+                continue
+            name = item.get("shortname") or item.get("longname") or item.get("exchDisp")
+            return symbol.replace(".SS", "").replace(".SZ", ""), name, ""
+    except Exception:
+        return None
+
+    return None
+
+
+def resolve_user_input_symbol(user_input: str) -> str:
+    raw = user_input.strip()
+    if not raw:
+        raise ValueError("请输入股票代码或名称")
+
+    if raw.isdigit() and len(raw) == 6:
+        return raw
+
+    # 对中文或拼音输入先尝试东财模糊搜索，再兜底 Yahoo 搜索
+    em_hit = search_eastmoney_symbol(raw)
+    if em_hit:
+        return em_hit[0]
+
+    yahoo_hit = search_yahoo_symbol_by_name(raw)
+    if yahoo_hit:
+        return yahoo_hit[0]
+
+    if contains_chinese(raw):
+        raise ValueError("未找到匹配的 A 股代码，请改用 6 位代码或美股代码（示例：600519 / TSLA）")
+
+    return raw.upper()
+
+
+@st.cache_data(show_spinner=False)
+def fetch_display_name(symbol: str, yahoo_symbol: str) -> str:
+    """获取用于展示的名称，优先返回 A 股中文名。"""
+
+    clean_sym = symbol.strip()
+
+    # A 股走东财接口拿中文名（SH=1, SZ=0）
+    if clean_sym.isdigit() and len(clean_sym) == 6:
+        market_code = "1" if yahoo_symbol.endswith(".SS") else "0"
+        try:
+            resp = requests.get(
+                "https://push2.eastmoney.com/api/qt/stock/get",
+                params={"secid": f"{market_code}.{clean_sym}", "fields": "f58,f57"},
+                headers={"Referer": "https://quote.eastmoney.com"},
+                timeout=8,
+            )
+            data = resp.json()
+            name = data.get("data", {}).get("f58")
+            if name:
+                return name
+        except Exception:
+            pass
+
+    # 兜底走 Yahoo quote 接口
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            params={"symbols": yahoo_symbol},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        quote = resp.json().get("quoteResponse", {}).get("result", [])
+        if quote:
+            info = quote[0]
+            for key in ("longName", "shortName", "displayName", "symbol"):
+                name = info.get(key)
+                if name:
+                    return name
+    except Exception:
+        pass
+
+    return yahoo_symbol
 
 
 def fetch_yahoo_ohlcv(symbol: str, range_str: str, interval: str):
@@ -150,12 +366,13 @@ def ema_np(x: np.ndarray, span: int) -> np.ndarray:
     return ema
 
 
-def macd_hist_np(close: np.ndarray) -> np.ndarray:
+def macd_lines(close: np.ndarray):
     ema12 = ema_np(close, 12)
     ema26 = ema_np(close, 26)
     macd_line = ema12 - ema26
     signal = ema_np(macd_line, 9)
-    return macd_line - signal
+    hist = macd_line - signal
+    return macd_line, signal, hist
 
 
 def rsi_np(close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -317,8 +534,10 @@ def decide_advice(prob: float, pf: float):
 # ============ 计算单只股票（使用上一根完整K线） ============
 def compute_stock_metrics(symbol: str, cfg_key: str):
     cfg = BACKTEST_CONFIG[cfg_key]
+    yahoo_symbol = format_symbol_for_yahoo(symbol)
+    display_name = fetch_display_name(symbol, yahoo_symbol)
     close, high, low, volume = fetch_yahoo_ohlcv(
-        symbol, range_str=cfg["range"], interval=cfg["interval"]
+        yahoo_symbol, range_str=cfg["range"], interval=cfg["interval"]
     )
 
     # 丢掉最后一根「可能还没走完」的K线
@@ -329,7 +548,7 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
         low = low[:-1]
         volume = volume[:-1]
 
-    macd_hist = macd_hist_np(close)
+    macd_line, macd_signal, macd_hist = macd_lines(close)
     rsi = rsi_np(close)
     atr = atr_np(high, low, close)
     obv = obv_np(close, volume)
@@ -430,8 +649,12 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
         "desc": f"1.05 / {obv_ratio:.2f}"
     })
 
+    window = min(len(close), 180)
+    start = len(close) - window
+
     return {
-        "symbol": symbol,
+        "symbol": yahoo_symbol,
+        "display_name": display_name,
         "price": float(last_close),
         "change": float(change_pct),
         "prob7": float(prob7),
@@ -445,20 +668,55 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
         "avg_win30": float(avg_win30),
         "avg_loss30": float(avg_loss30),
         "indicators": indicators,
+        "charts": {
+            "labels": list(range(window)),
+            "macd": macd_line[start:].astype(float).tolist(),
+            "macd_signal": macd_signal[start:].astype(float).tolist(),
+            "macd_hist": macd_hist[start:].astype(float).tolist(),
+            "close": close[start:].astype(float).tolist(),
+            "volume": volume[start:].astype(float).tolist(),
+            "vol_ma5": rolling_mean_np(volume, 5)[start:].astype(float).tolist(),
+            "rsi": rsi[start:].astype(float).tolist(),
+            "atr": atr[start:].astype(float).tolist(),
+            "obv": obv[start:].astype(float).tolist(),
+        },
     }
 
 
 # ============ 缓存 ============
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 11):
-    # version 改成 11，强制刷新缓存
+def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 14):
+    # version 改成 14，强制刷新缓存
     return compute_stock_metrics(symbol, cfg_key=cfg_key)
 
 
 # ============ Streamlit 交互层 ============
+def add_symbol_from_input():
+    raw_val = st.session_state.get("new_symbol_input", "")
+    if not raw_val.strip():
+        return
+    try:
+        sym = resolve_user_input_symbol(raw_val)
+    except ValueError as e:
+        st.warning(str(e))
+        return
+
+    if sym in st.session_state.watchlist:
+        st.session_state.watchlist.remove(sym)
+    st.session_state.watchlist.insert(0, sym)
+    st.session_state.new_symbol_input = ""
+
+
 default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
+
+if st.session_state.get("mode_label") and st.session_state.mode_label not in BACKTEST_CONFIG:
+    del st.session_state["mode_label"]
+
+MODE_DEFAULT = "1年"
+if "mode_label" not in st.session_state or st.session_state.get("mode_label") not in BACKTEST_CONFIG:
+    st.session_state["mode_label"] = MODE_DEFAULT
 
 top_c1, top_c2, top_c3, top_c4 = st.columns([2.4, 1.1, 1.1, 1.4])
 
@@ -467,11 +725,13 @@ with top_c1:
         "",
         value="",
         max_chars=10,
-        placeholder="输入股票代码添加到自选（例：TSLA）",
+        placeholder="输入股票代码或中文名（例：TSLA / 600519 / 贵州茅台）",
         label_visibility="collapsed",
+        key="new_symbol_input",
+        on_change=add_symbol_from_input,
     )
 with top_c2:
-    add_btn = st.button("➕ 添加/置顶")
+    add_btn = st.button("查询")
 with top_c3:
     sort_by = st.selectbox(
         "",
@@ -482,16 +742,14 @@ with top_c3:
 with top_c4:
     mode_label = st.selectbox(
         "",
-        list(BACKTEST_CONFIG.keys()),
-        index=2,
+        BACKTEST_OPTIONS,
+        index=BACKTEST_OPTIONS.index(MODE_DEFAULT),
         label_visibility="collapsed",
+        key="mode_label",
     )
 
-if add_btn and new_symbol.strip():
-    sym = new_symbol.strip().upper()
-    if sym in st.session_state.watchlist:
-        st.session_state.watchlist.remove(sym)
-    st.session_state.watchlist.insert(0, sym)
+if add_btn:
+    add_symbol_from_input()
 
 rows = []
 for sym in st.session_state.watchlist:
@@ -515,10 +773,13 @@ if not rows:
     st.info("暂无自选股票，请先在上方输入代码添加。")
 else:
     cols_per_row = 4
+    card_counter = 0
     for i in range(0, len(rows), cols_per_row):
         cols = st.columns(cols_per_row)
         for col, row in zip(cols, rows[i:i + cols_per_row]):
             with col:
+                card_id = f"card-{card_counter}"
+                card_counter += 1
                 change_class = "change-up" if row["change"] >= 0 else "change-down"
                 change_str = f"{row['change']:+.2f}%"
 
@@ -537,14 +798,25 @@ else:
                 prob7_class = prob_class(row["prob7"])
                 prob30_class = prob_class(row["prob30"])
 
+                indicator_keys = ["macd", "volume", "rsi", "atr", "obv"]
+                view_titles = {
+                    "macd": ("MACD 三线图", "MACD / DIF / DEA 的趋势示图"),
+                    "volume": ("成交量与均量", "成交量柱状图与 5 日均量线"),
+                    "rsi": ("RSI 强弱线", "相对强弱指标（14）单线"),
+                    "atr": ("ATR 波动率", "真实波幅均值 (14) 趋势"),
+                    "obv": ("OBV 资金趋势", "累积能量线走势"),
+                }
+
                 indicators_html = ""
-                for ind in row["indicators"]:
+                for key, ind in zip(indicator_keys, row["indicators"]):
+                    view_id = f"{card_id}-view-{key}"
                     if ind["desc"]:
                         line = f"{ind['name']} ({ind['desc']})"
                     else:
                         line = ind["name"]
                     indicators_html += (
-                        f"<div class='label'>{line}"
+                        f"<div class='indicator-item' data-card-trigger='{card_id}' data-target='{view_id}'>"
+                        f"<span>{line}</span>"
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
@@ -575,44 +847,214 @@ else:
                     adv30_label, adv30_intensity, adv30_kind
                 )
 
+                display_name = row.get("display_name", row["symbol"])
+                ticker_label = row["symbol"]
+
+                chart_sections = []
+                for key in indicator_keys:
+                    title, subtitle = view_titles[key]
+                    view_id = f"{card_id}-view-{key}"
+                    canvas_id = f"{view_id}-canvas"
+                    chart_sections.append(
+                        f"""
+                        <div class=\"card-layer layer-hidden chart-view\" id=\"{view_id}\" data-card-view=\"{card_id}\">
+                          <div class=\"chart-header\">
+                            <button class=\"back-btn\" data-back=\"{card_id}\">← 返回</button>
+                            <div>
+                              <div class=\"chart-title\">{title}</div>
+                              <div class=\"chart-subtitle\">{subtitle}</div>
+                            </div>
+                          </div>
+                          <div class=\"chart-body\">
+                            <canvas id=\"{canvas_id}\" height=\"230\"></canvas>
+                          </div>
+                        </div>
+                        """
+                    )
+
+                chart_json = json.dumps(row.get("charts", {}))
+
                 html = f"""
-                <div class="card">
-                  <div class="symbol-line">
-                    <span class="symbol-code">{row['symbol']}</span>
-                    <span class="symbol-price">${row['price']:.2f}</span>
-                    <span class="{change_class}">{change_str}</span>
-                  </div>
-
-                  <div style="margin-top:4px;margin-bottom:6px">
-                    {indicators_html}
-                  </div>
-
-                  <div style="border-bottom:1px dashed #262736;margin:6px 0 6px;"></div>
-
-                  <div>
-                    <div>
-                      <span class="label">7日盈利概率</span>
-                      <span class="{prob7_class}"> {prob7_pct:.1f}%</span>
-                      <span class="label"> (均盈 {avg_win7_pct:+.1f}%&nbsp;&nbsp;均亏 {avg_loss7_pct:+.1f}%&nbsp;&nbsp;盈亏 {pf7:.2f})</span>
+                <div class=\"card\" id=\"{card_id}\">
+                  <div class=\"card-layer layer-active\" id=\"{card_id}-front\">
+                    <div class=\"card-section\">
+                      <div class=\"symbol-line\">
+                        <span class=\"symbol-name\">{display_name}</span>
+                        <span class=\"symbol-ticker\">{ticker_label}</span>
+                      </div>
+                      <div class=\"card-section\" style=\"gap:6px;align-items:center;\">
+                        <span class=\"symbol-price\">${row['price']:.2f}</span>
+                        <span class=\"{change_class}\">{change_str}</span>
+                      </div>
                     </div>
+
+                    <div class=\"section-divider\"></div>
+
+                    <div class=\"indicator-grid\">
+                      {indicators_html}
+                    </div>
+
+                    <div class=\"section-divider\"></div>
+
                     <div>
-                      <span class="label">30日盈利概率</span>
-                      <span class="{prob30_class}"> {prob30_pct:.1f}%</span>
-                      <span class="label"> (均盈 {avg_win30_pct:+.1f}%&nbsp;&nbsp;均亏 {avg_loss30_pct:+.1f}%&nbsp;&nbsp;盈亏 {pf30:.2f})</span>
+                      <div class=\"profit-row\" style=\"display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;\">
+                        <div>
+                          <span class=\"label\">7日盈利概率</span>
+                          <span class=\"{prob7_class}\"> {prob7_pct:.1f}%</span>
+                        </div>
+                        <div class=\"label\">均盈 {avg_win7_pct:+.1f}% / 均亏 {avg_loss7_pct:+.1f}% / 盈亏 {pf7:.2f}</div>
+                      </div>
+                      <div class=\"profit-row\" style=\"display:flex;justify-content:space-between;gap:8px;\">
+                        <div>
+                          <span class=\"label\">30日盈利概率</span>
+                          <span class=\"{prob30_class}\"> {prob30_pct:.1f}%</span>
+                        </div>
+                        <div class=\"label\">均盈 {avg_win30_pct:+.1f}% / 均亏 {avg_loss30_pct:+.1f}% / 盈亏 {pf30:.2f}</div>
+                      </div>
+                    </div>
+
+                    <div class=\"section-divider\"></div>
+
+                    <div class=\"score\">
+                      <span class=\"score-label\">7日信号</span>
+                      <span class=\"{adv7_class}\">{adv7_text}</span>
+                      {adv7_dots}
+                    </div>
+                    <div class=\"score\">
+                      <span class=\"score-label\">30日信号</span>
+                      <span class=\"{adv30_class}\">{adv30_text}</span>
+                      {adv30_dots}
                     </div>
                   </div>
 
-                  <div class="score">
-                    <span class="score-label">7日信号</span>
-                    <span class="{adv7_class}">{adv7_text}</span>
-                    {adv7_dots}
-                  </div>
-                  <div class="score">
-                    <span class="score-label">30日信号</span>
-                    <span class="{adv30_class}">{adv30_text}</span>
-                    {adv30_dots}
-                  </div>
+                  {''.join(chart_sections)}
                 </div>
+
+                <script>
+                  (function() {{
+                    const cardId = "{card_id}";
+                    const front = document.getElementById(`${cardId}-front`);
+                    const views = Array.from(document.querySelectorAll(`[data-card-view='${card_id}']`));
+                    const triggers = Array.from(document.querySelectorAll(`[data-card-trigger='${card_id}']`));
+                    const chartData = {chart_json};
+                    const chartPool = {{}};
+
+                    function showFront() {{
+                      front.classList.add('layer-active');
+                      front.classList.remove('layer-hidden');
+                      views.forEach(v => {{ v.classList.add('layer-hidden'); v.classList.remove('layer-active'); }});
+                    }}
+
+                    function showView(viewId) {{
+                      front.classList.add('layer-hidden');
+                      front.classList.remove('layer-active');
+                      views.forEach(v => {{
+                        if (v.id === viewId) {{
+                          v.classList.add('layer-active');
+                          v.classList.remove('layer-hidden');
+                        }} else {{
+                          v.classList.add('layer-hidden');
+                          v.classList.remove('layer-active');
+                        }}
+                      }});
+                      renderChart(viewId);
+                    }}
+
+                    function baseLineConfig(labels, datasets) {{
+                      return {{
+                        type: 'line',
+                        data: {{ labels, datasets }},
+                        options: {{
+                          responsive: true,
+                          maintainAspectRatio: false,
+                          plugins: {{ legend: {{ display: true, labels: {{ color: '#d4d4d8' }} }} }},
+                          scales: {{
+                            x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                            y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                          }},
+                        }},
+                      }};
+                    }}
+
+                    function renderChart(viewId) {{
+                      if (chartPool[viewId]) return;
+                      const ctx = document.getElementById(`${viewId}-canvas`);
+                      if (!ctx || !chartData || !chartData.labels) return;
+
+                      let config;
+                      if (viewId.endsWith('macd')) {{
+                        config = {{
+                          type: 'bar',
+                          data: {{
+                            labels: chartData.labels,
+                            datasets: [
+                              {{ type: 'line', label: 'MACD', data: chartData.macd, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.15)', borderWidth: 2, tension: 0.25 }},
+                              {{ type: 'line', label: 'DEA', data: chartData.macd_signal, borderColor: '#c084fc', backgroundColor: 'rgba(192,132,252,0.15)', borderWidth: 2, tension: 0.25 }},
+                              {{ type: 'bar', label: '柱状', data: chartData.macd_hist, backgroundColor: chartData.macd_hist.map(v => v >= 0 ? 'rgba(74,222,128,0.55)' : 'rgba(251,113,133,0.55)') }},
+                            ],
+                          }},
+                          options: {{
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {{ legend: {{ labels: {{ color: '#d4d4d8' }} }} }},
+                            scales: {{
+                              x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                              y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }}, zeroLineColor: '#4b5563' }},
+                            }},
+                          }},
+                        }};
+                      }} else if (viewId.endsWith('volume')) {{
+                        config = {{
+                          type: 'bar',
+                          data: {{
+                            labels: chartData.labels,
+                            datasets: [
+                              {{ label: '成交量', data: chartData.volume, backgroundColor: 'rgba(96,165,250,0.55)', borderWidth: 0 }},
+                              {{ type: 'line', label: 'MA5', data: chartData.vol_ma5, borderColor: '#facc15', backgroundColor: 'rgba(250,204,21,0.2)', borderWidth: 2, tension: 0.2, yAxisID: 'y' }},
+                            ],
+                          }},
+                          options: {{
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {{ legend: {{ labels: {{ color: '#d4d4d8' }} }} }},
+                            scales: {{
+                              x: {{ stacked: true, ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                              y: {{ stacked: true, ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                            }},
+                          }},
+                        }};
+                      }} else if (viewId.endsWith('rsi')) {{
+                        config = baseLineConfig(chartData.labels, [
+                          {{ label: 'RSI (14)', data: chartData.rsi, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.1)', borderWidth: 2, tension: 0.2 }},
+                        ]);
+                      }} else if (viewId.endsWith('atr')) {{
+                        config = baseLineConfig(chartData.labels, [
+                          {{ label: 'ATR (14)', data: chartData.atr, borderColor: '#facc15', backgroundColor: 'rgba(250,204,21,0.15)', borderWidth: 2, tension: 0.2 }},
+                        ]);
+                      }} else if (viewId.endsWith('obv')) {{
+                        config = baseLineConfig(chartData.labels, [
+                          {{ label: 'OBV', data: chartData.obv, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.15)', borderWidth: 2, tension: 0.2 }},
+                        ]);
+                      }}
+
+                      if (config) {{
+                        chartPool[viewId] = new Chart(ctx, config);
+                      }}
+                    }}
+
+                    triggers.forEach(el => {{
+                      el.addEventListener('click', () => showView(el.getAttribute('data-target')));
+                    }});
+
+                    views.forEach(v => {{
+                      const backBtn = v.querySelector('[data-back]');
+                      if (backBtn) backBtn.addEventListener('click', showFront);
+                      v.classList.add('layer-hidden');
+                    }});
+
+                    showFront();
+                  }})();
+                </script>
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
