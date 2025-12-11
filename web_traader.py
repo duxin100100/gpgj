@@ -1,21 +1,19 @@
 # web_traader.py
-# 量化技术信号面板（回测 + 信号说明）
+# 量化技术信号面板（回测 + 浏览器原生弹窗说明）
 
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
 
-# ============ 基础配置 ============
-
+# ============ 页面基础配置 ============
 st.set_page_config(
     page_title="量化技术信号面板",
-    page_icon="📈",
+    page_icon="📊",
     layout="wide",
 )
 
-# 一点简单的暗色系样式
+# 简单暗色样式
 st.markdown(
     """
     <style>
@@ -94,26 +92,25 @@ st.markdown(
         font-weight: 700;
         font-size: 15px;
     }
-    .arrow-btn > button {
-        border-radius: 999px !important;
-        padding: 2px 8px !important;
-        margin-top: 2px;
+    .arrow-html-btn {
+        border-radius: 999px;
+        padding: 2px 10px;
+        background: #202334;
+        color: #f5f5f5;
+        border: none;
+        cursor: pointer;
+        font-size: 16px;
+        line-height: 1;
     }
-    .explain-box {
-        margin-top: 8px;
-        padding: 10px 12px;
-        background: #141623;
-        border-radius: 12px;
-        font-size: 14px;
-        line-height: 1.6;
-        color: #e5e5e5;
+    .arrow-html-btn:hover {
+        background: #31354a;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ============ 工具函数 ============
+# ============ 数据 & 指标函数 ============
 
 
 @st.cache_data(show_spinner=False)
@@ -128,56 +125,60 @@ def load_price_data(symbol: str, years: int) -> pd.DataFrame:
 
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """计算 MACD / RSI / ATR / OBV 等技术指标"""
+    """计算 MACD / 成交量比 / RSI / ATR / OBV"""
 
     df = df.copy()
 
-    # MACD
+    # --- MACD ---
     df["EMA12"] = df["Close"].ewm(span=12, adjust=False).mean()
     df["EMA26"] = df["Close"].ewm(span=26, adjust=False).mean()
     df["MACD"] = df["EMA12"] - df["EMA26"]
     df["MACD_SIGNAL"] = df["MACD"].ewm(span=9, adjust=False).mean()
     df["MACD_HIST"] = df["MACD"] - df["MACD_SIGNAL"]
 
-    # 成交量均量比
-    df["VOL_MA20"] = df["Volume"].rolling(20).mean()
-    df["VOL_RATIO"] = df["Volume"] / df["VOL_MA20"]
+    # --- 成交量 20 日均量比 ---
+    vol_ma20 = df["Volume"].rolling(20).mean()
+    df["VOL_MA20"] = vol_ma20
+    # 注意：全部使用 Series 运算，避免 DataFrame 赋值报错
+    df["VOL_RATIO"] = df["Volume"] / vol_ma20
 
-    # RSI 14
+    # --- RSI 14 ---
     delta = df["Close"].diff()
-    gain = np.where(delta > 0, delta, 0.0)
-    loss = np.where(delta < 0, -delta, 0.0)
-    roll_gain = pd.Series(gain, index=df.index).rolling(14).mean()
-    roll_loss = pd.Series(loss, index=df.index).rolling(14).mean()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+    roll_gain = gain.rolling(14).mean()
+    roll_loss = loss.rolling(14).mean()
     rs = roll_gain / roll_loss
     df["RSI"] = 100 - 100 / (1 + rs)
 
-    # ATR 14
+    # --- ATR 14 & ATR 比 ---
     high_low = df["High"] - df["Low"]
     high_close = (df["High"] - df["Close"].shift()).abs()
     low_close = (df["Low"] - df["Close"].shift()).abs()
     true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df["ATR"] = true_range.rolling(14).mean()
-    df["ATR_MA20"] = df["ATR"].rolling(20).mean()
-    df["ATR_RATIO"] = df["ATR"] / df["ATR_MA20"]
+    atr_ma20 = df["ATR"].rolling(20).mean()
+    df["ATR_MA20"] = atr_ma20
+    df["ATR_RATIO"] = df["ATR"] / atr_ma20
 
-    # OBV + 均值比
-    obv = []
-    last_obv = 0
+    # --- OBV & 比值 ---
     closes = df["Close"].values
     vols = df["Volume"].values
+    obv_list = []
+    last_obv = 0
     for i in range(len(df)):
         if i == 0:
-            obv.append(0)
+            obv_list.append(0)
         else:
             if closes[i] > closes[i - 1]:
                 last_obv += vols[i]
             elif closes[i] < closes[i - 1]:
                 last_obv -= vols[i]
-        obv.append(last_obv)
-    df["OBV"] = obv
-    df["OBV_MA20"] = df["OBV"].rolling(20).mean()
-    df["OBV_RATIO"] = df["OBV"] / df["OBV_MA20"]
+        obv_list.append(last_obv)
+    df["OBV"] = obv_list
+    obv_ma20 = df["OBV"].rolling(20).mean()
+    df["OBV_MA20"] = obv_ma20
+    df["OBV_RATIO"] = df["OBV"] / obv_ma20
 
     df = df.dropna()
     return df
@@ -230,10 +231,9 @@ def decide_advice(prob: float, pf: float):
     if np.isnan(prob) or np.isnan(pf):
         return "观望", 1, "hold"
 
-    # 基本分数
     score = 0
 
-    # 胜率分
+    # 胜率加分
     if prob >= 55:
         score += 1
     if prob >= 60:
@@ -241,21 +241,20 @@ def decide_advice(prob: float, pf: float):
     if prob >= 70:
         score += 1
 
-    # 盈亏比分
+    # 盈亏比加分
     if pf >= 1.2:
         score += 1
     if pf >= 1.6:
         score += 1
 
-    # 判断方向
+    # 方向 + 标签
     if prob >= 55 and pf >= 1.1:
         kind = "buy"
         label = "建议买入"
     elif prob <= 45 and pf <= 0.9:
         kind = "sell"
         label = "建议卖出"
-        # 方向反转评分（越低越想卖）
-        score = max(1, 6 - score)
+        score = max(1, 6 - score)  # 反向
     else:
         kind = "hold"
         label = "观望"
@@ -291,9 +290,8 @@ def color_dot_by_ratio(current: float, target: float):
 
 
 def build_signal_explanation(row: dict, horizon: int, lookback_label: str) -> str:
-    """生成 7日 / 30日 信号说明文字"""
+    """生成 7日 / 30日 信号说明文字（用于 alert）"""
 
-    # 固定的“数据”描述，直接写死，和阈值保持一致
     macd_desc = "MACD 柱线＞0 的多头结构"
     vol_desc = "成交量 ≥ 20 日均量的 1.10 倍"
     rsi_desc = "RSI ≥ 60"
@@ -317,18 +315,17 @@ def build_signal_explanation(row: dict, horizon: int, lookback_label: str) -> st
 
     if N == 0 or np.isnan(prob):
         return (
-            f"在过去 **{lookback_label}** 中，没有找到足够多的历史样本满足当前这类技术组合，"
+            f"在过去 {lookback_label} 中，没有找到足够多的历史样本满足当前这类技术组合，"
             f"暂时无法给出可靠的 {horizon} 日统计结果，请仅作参考。"
         )
 
     text = (
-        f"在过去 **{lookback_label}**，当这只股票出现「MACD 偏多（{macd_desc}）、"
+        f"在过去 {lookback_label}，当这只股票出现「MACD 偏多（{macd_desc}）、"
         f"量能放大（{vol_desc}）、RSI 偏强（{rsi_desc}）、波动放大（{atr_desc}）、"
-        f"OBV 偏多（{obv_desc}）」这一类技术组合（以上 5 项指标中至少有 **3 项** "
-        f"同时达到当前这次的强度区间）时，历史上共出现 **{N} 次**，其中有 **{W} 次** "
-        f"在随后 **{horizon} 个交易日内上涨**。\n\n"
-        f"{horizon} 日上涨概率约 **{prob:.1f}%**，上涨时平均涨 **{avg_win:.1f}%**，"
-        f"下跌时平均跌 **{avg_loss:.1f}%**，整体盈亏比约 **{pf:.2f} 倍**。"
+        f"OBV 偏多（{obv_desc}）」这一类技术组合（5 项指标中至少 3 项达到当前这次的强度区间）时，"
+        f"历史上共出现 {N} 次，其中有 {W} 次在随后 {horizon} 个交易日内上涨。"
+        f"\\n\\n{horizon} 日上涨概率约 {prob:.1f}% ，上涨时平均涨 {avg_win:.1f}%，"
+        f"下跌时平均跌 {avg_loss:.1f}%，整体盈亏比约 {pf:.2f} 倍。"
     )
 
     return text
@@ -370,7 +367,7 @@ def compute_stock_metrics(symbol: str, years: int):
         + df["SIG_OBV"]
     )
 
-    # 未来收益（7 / 30 日）
+    # 未来收益
     df["RET_7"] = df["Close"].shift(-7) / df["Close"] - 1
     df["RET_30"] = df["Close"].shift(-30) / df["Close"] - 1
 
@@ -379,10 +376,7 @@ def compute_stock_metrics(symbol: str, years: int):
     stats7 = backtest_stats(df.loc[mask_sig, "RET_7"])
     stats30 = backtest_stats(df.loc[mask_sig, "RET_30"])
 
-    # 建议
-    adv7_label, adv7_intensity, adv7_kind = decide_advice(
-        stats7["prob"], stats7["pf"]
-    )
+    adv7_label, adv7_intensity, adv7_kind = decide_advice(stats7["prob"], stats7["pf"])
     adv30_label, adv30_intensity, adv30_kind = decide_advice(
         stats30["prob"], stats30["pf"]
     )
@@ -396,26 +390,24 @@ def compute_stock_metrics(symbol: str, years: int):
         rsi=float(last["RSI"]),
         atr_ratio=float(last["ATR_RATIO"]),
         obv_ratio=float(last["OBV_RATIO"]),
-        # 阈值
         vol_target=VOL_TARGET,
         rsi_target=RSI_TARGET,
         atr_target=ATR_TARGET,
         obv_target=OBV_TARGET,
-        # 7 日回测
+        # 7日
         prob7=stats7["prob"],
         avg_win7=stats7["avg_win"],
         avg_loss7=stats7["avg_loss"],
         pf7=stats7["pf"],
         count7=stats7["count"],
         win7=stats7["win_count"],
-        # 30 日回测
+        # 30日
         prob30=stats30["prob"],
         avg_win30=stats30["avg_win"],
         avg_loss30=stats30["avg_loss"],
         pf30=stats30["pf"],
         count30=stats30["count"],
         win30=stats30["win_count"],
-        # 建议
         adv7_label=adv7_label,
         adv7_intensity=adv7_intensity,
         adv7_kind=adv7_kind,
@@ -427,20 +419,18 @@ def compute_stock_metrics(symbol: str, years: int):
     return row
 
 
-# ============ 页面结构 ============
+# ============ 页面控件 ============
 
 st.markdown(
     '<div class="stock-title">📊 量化技术信号面板</div>',
     unsafe_allow_html=True,
 )
 
-# 默认展示：QQQ + 美股七姐妹
 default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
 
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
 
-# 顶部：输入 + 添加/置顶
 top_c1, top_c2 = st.columns([4, 1.1])
 with top_c1:
     new_symbol = st.text_input(
@@ -458,7 +448,6 @@ with top_c2:
                 st.session_state.watchlist.remove(code)
             st.session_state.watchlist.insert(0, code)
 
-# 排序方式 & 回测区间
 bar_c1, bar_c2 = st.columns([1.2, 1])
 with bar_c1:
     sort_by = st.selectbox(
@@ -478,7 +467,7 @@ with bar_c2:
 lookback_map = {"1年": 1, "2年": 2, "3年": 3, "5年": 5, "10年": 10}
 years = lookback_map[lookback_label]
 
-st.write("")  # 间隔
+st.write("")
 
 # ============ 计算所有股票数据 ============
 
@@ -489,19 +478,19 @@ for sym in st.session_state.watchlist:
         if metrics:
             rows.append(metrics)
     except Exception as e:
-        st.warning(f"{sym} 数据获取失败：{e}")
+        st.warning(f"{sym} 数据获取失败： {e}")
 
 # 排序
 if sort_by == "7日盈利概率":
     rows = sorted(
         rows,
-        key=lambda r: (0 if np.isnan(r["prob7"]) else r["prob7"]),
+        key=lambda r: 0 if np.isnan(r["prob7"]) else r["prob7"],
         reverse=True,
     )
 elif sort_by == "30日盈利概率":
     rows = sorted(
         rows,
-        key=lambda r: (0 if np.isnan(r["prob30"]) else r["prob30"]),
+        key=lambda r: 0 if np.isnan(r["prob30"]) else r["prob30"],
         reverse=True,
     )
 elif sort_by == "信号强度":
@@ -513,9 +502,6 @@ elif sort_by == "信号强度":
 
 # ============ 渲染卡片 ============
 
-if "explain_flags" not in st.session_state:
-    st.session_state.explain_flags = {}  # key: f"{symbol}_{horizon}"
-
 n_cols = 3
 cols = st.columns(n_cols)
 
@@ -524,7 +510,6 @@ for idx, row in enumerate(rows):
     with col:
         st.markdown('<div class="stock-card">', unsafe_allow_html=True)
 
-        # 顶部：代码 + 价格 + 涨跌
         chg_cls = "stock-chg-pos" if row["pct_chg"] >= 0 else "stock-chg-neg"
         st.markdown(
             f"""
@@ -557,9 +542,9 @@ for idx, row in enumerate(rows):
 
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-        # 7 / 30 日盈利概率
+        # 盈利概率展示
         if np.isnan(row["prob7"]):
-            prob7_str = "暂无有效样本"
+            prob7_str = "7日盈利概率 暂无有效样本"
         else:
             prob7_str = (
                 f"7日盈利概率 <span class='prob-highlight'>{row['prob7']:.1f}%</span>"
@@ -567,7 +552,7 @@ for idx, row in enumerate(rows):
             )
 
         if np.isnan(row["prob30"]):
-            prob30_str = "暂无有效样本"
+            prob30_str = "30日盈利概率 暂无有效样本"
         else:
             prob30_str = (
                 f"30日盈利概率 <span class='prob-highlight-30'>{row['prob30']:.1f}%</span>"
@@ -582,7 +567,7 @@ for idx, row in enumerate(rows):
 
         st.write("")
 
-        # 7 日信号 + 右侧 >
+        # 7 日信号 + 原生弹窗按钮
         s7_c1, s7_c2, s7_c3, s7_c4 = st.columns([1.4, 1.8, 2.8, 0.7])
         with s7_c1:
             st.markdown('<span class="signal-label">7日信号</span>', unsafe_allow_html=True)
@@ -601,53 +586,12 @@ for idx, row in enumerate(rows):
         with s7_c3:
             st.markdown(dots(row["adv7_intensity"], row["adv7_kind"]))
         with s7_c4:
-            key_btn7 = f"{row['symbol']}_7_btn"
-            key_flag7 = f"{row['symbol']}_7_flag"
-            if st.button("›", key=key_btn7):
-                st.session_state.explain_flags[key_flag7] = not st.session_state.explain_flags.get(
-                    key_flag7, False
-                )
-
-        # 30 日信号 + 右侧 >
-        s30_c1, s30_c2, s30_c3, s30_c4 = st.columns([1.4, 1.8, 2.8, 0.7])
-        with s30_c1:
-            st.markdown('<span class="signal-label">30日信号</span>', unsafe_allow_html=True)
-        with s30_c2:
-            cls2 = (
-                "signal-adv-buy"
-                if row["adv30_kind"] == "buy"
-                else "signal-adv-sell"
-                if row["adv30_kind"] == "sell"
-                else "signal-adv-hold"
-            )
-            st.markdown(
-                f'<span class="{cls2}">{row["adv30_label"]}</span>',
-                unsafe_allow_html=True,
-            )
-        with s30_c3:
-            st.markdown(dots(row["adv30_intensity"], row["adv30_kind"]))
-        with s30_c4:
-            key_btn30 = f"{row['symbol']}_30_btn"
-            key_flag30 = f"{row['symbol']}_30_flag"
-            if st.button("›", key=key_btn30):
-                st.session_state.explain_flags[key_flag30] = not st.session_state.explain_flags.get(
-                    key_flag30, False
-                )
-
-        # 展开说明：7 日
-        if st.session_state.explain_flags.get(key_flag7, False):
             txt7 = build_signal_explanation(row, 7, lookback_label)
-            st.markdown(
-                f'<div class="explain-box">{txt7}</div>',
-                unsafe_allow_html=True,
-            )
+            # JS alert 文本转义
+            alert7 = txt7.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+            html_btn7 = f"""
+            <button class="arrow-html-btn" onclick="alert('{alert7}')">›</button>
+            """
+            st.markdown(html_btn7, unsafe_allow_html=True)
 
-        # 展开说明：30 日
-        if st.session_state.explain_flags.get(key_flag30, False):
-            txt30 = build_signal_explanation(row, 30, lookback_label)
-            st.markdown(
-                f'<div class="explain-box">{txt30}</div>',
-                unsafe_allow_html=True,
-            )
-
-        st.markdown("</div>", unsafe_allow_html=True)  # end card
+        # 30 日信号 + 原生弹窗按钮
