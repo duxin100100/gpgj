@@ -237,13 +237,16 @@ def resolve_user_input_symbol(user_input: str) -> str:
     if raw.isdigit() and len(raw) == 6:
         return raw
 
+    # 对中文或拼音输入先尝试东财模糊搜索，再兜底 Yahoo 搜索
+    em_hit = search_eastmoney_symbol(raw)
+    if em_hit:
+        return em_hit[0]
+
+    yahoo_hit = search_yahoo_symbol_by_name(raw)
+    if yahoo_hit:
+        return yahoo_hit[0]
+
     if contains_chinese(raw):
-        result = search_eastmoney_symbol(raw)
-        if result:
-            return result[0]
-        yahoo_hit = search_yahoo_symbol_by_name(raw)
-        if yahoo_hit:
-            return yahoo_hit[0]
         raise ValueError("未找到匹配的 A 股代码，请改用 6 位代码或美股代码")
 
     return raw.upper()
@@ -662,6 +665,9 @@ def add_symbol_from_input():
 default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA"]
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
+
+if st.session_state.get("mode_label") and st.session_state.mode_label not in BACKTEST_CONFIG:
+    del st.session_state["mode_label"]
 
 top_c1, top_c2, top_c3, top_c4 = st.columns([2.4, 1.1, 1.1, 1.4])
 
