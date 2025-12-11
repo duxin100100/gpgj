@@ -134,6 +134,7 @@ BACKTEST_CONFIG = {
     "3个月": {"range": "3mo", "interval": "1d", "steps_per_day": 1},
     "6个月": {"range": "6mo", "interval": "1d", "steps_per_day": 1},
     "1年":  {"range": "1y",  "interval": "1d", "steps_per_day": 1},
+    "6个月": {"range": "6mo", "interval": "1d", "steps_per_day": 1},
     "2年":  {"range": "2y",  "interval": "1d", "steps_per_day": 1},
     "3年":  {"range": "3y",  "interval": "1d", "steps_per_day": 1},
     "5年":  {"range": "5y",  "interval": "1d", "steps_per_day": 1},
@@ -161,6 +162,64 @@ def format_symbol_for_yahoo(symbol: str) -> str:
             return f"{sym}.SZ"  # 深交所
 
     return sym
+
+
+def contains_chinese(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+@st.cache_data(show_spinner=False)
+def search_eastmoney_symbol(query: str):
+    """尝试用东财模糊搜索中文名称，返回 (代码, 名称, 市场) 或 None。"""
+
+    try:
+        resp = requests.get(
+            "https://searchapi.eastmoney.com/api/suggest/get",
+            params={
+                "input": query,
+                "type": "14",
+                "token": "BD5FB5E653E986E07EED55F0F9F3CD9D",
+                "format": "json",
+                "count": 10,
+            },
+            headers={"Referer": "https://www.eastmoney.com"},
+            timeout=10,
+        )
+        data = resp.json()
+        table = data.get("QuotationCodeTable") or data.get("Data") or {}
+        records = (
+            table.get("Data")
+            or table.get("data")
+            or data.get("items")
+            or []
+        )
+        for rec in records:
+            code = rec.get("Code") or rec.get("code")
+            name = rec.get("Name") or rec.get("name")
+            market = str(rec.get("Market") or rec.get("market") or "")
+            if code and len(code) == 6 and market in {"0", "1"}:
+                return code, name, market
+    except Exception:
+        return None
+
+    return None
+
+
+def resolve_user_input_symbol(user_input: str) -> str:
+    raw = user_input.strip()
+    if not raw:
+        raise ValueError("请输入股票代码或名称")
+
+    if raw.isdigit() and len(raw) == 6:
+        return raw
+
+    if contains_chinese(raw):
+        result = search_eastmoney_symbol(raw)
+        if result:
+            return result[0]
+        raise ValueError("未找到匹配的 A 股代码，请改用 6 位代码或美股代码")
+
+    return raw.upper()
 
 
 @st.cache_data(show_spinner=False)
@@ -551,8 +610,8 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
 
 # ============ 缓存 ============
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 11):
-    # version 改成 11，强制刷新缓存
+def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 12):
+    # version 改成 12，强制刷新缓存
     return compute_stock_metrics(symbol, cfg_key=cfg_key)
 
 
@@ -568,7 +627,7 @@ with top_c1:
         "",
         value="",
         max_chars=10,
-        placeholder="输入股票代码添加到自选（例：TSLA 或 600519）",
+        placeholder="输入股票代码或中文名（例：TSLA / 600519 / 贵州茅台）",
         label_visibility="collapsed",
     )
 with top_c2:
@@ -584,15 +643,19 @@ with top_c4:
     mode_label = st.selectbox(
         "",
         list(BACKTEST_CONFIG.keys()),
-        index=4,
+        index=list(BACKTEST_CONFIG.keys()).index("1年"),
         label_visibility="collapsed",
     )
 
 if add_btn and new_symbol.strip():
-    sym = new_symbol.strip().upper()
-    if sym in st.session_state.watchlist:
-        st.session_state.watchlist.remove(sym)
-    st.session_state.watchlist.insert(0, sym)
+    try:
+        sym = resolve_user_input_symbol(new_symbol)
+    except ValueError as e:
+        st.warning(str(e))
+    else:
+        if sym in st.session_state.watchlist:
+            st.session_state.watchlist.remove(sym)
+        st.session_state.watchlist.insert(0, sym)
 
 rows = []
 for sym in st.session_state.watchlist:
