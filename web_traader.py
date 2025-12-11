@@ -130,6 +130,7 @@ st.markdown(
 st.title("回测信号面板")
 
 # ============ 回测配置（日线+4H+1H） ============
+BACKTEST_OPTIONS = ["1年", "6个月", "2年", "3年", "5年", "10年"]
 BACKTEST_CONFIG = {
     "3个月": {"range": "3mo", "interval": "1d", "steps_per_day": 1},
     "6个月": {"range": "6mo", "interval": "1d", "steps_per_day": 1},
@@ -168,7 +169,6 @@ def contains_chinese(text: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
 
-@st.cache_data(show_spinner=False)
 def search_eastmoney_symbol(query: str):
     """尝试用东财模糊搜索中文名称，返回 (代码, 名称, 市场) 或 None。"""
 
@@ -205,14 +205,19 @@ def search_eastmoney_symbol(query: str):
     return None
 
 
-@st.cache_data(show_spinner=False)
 def search_yahoo_symbol_by_name(query: str):
     """使用 Yahoo Finance 搜索接口用中文模糊匹配 A 股代码。"""
 
     try:
         resp = requests.get(
             "https://query1.finance.yahoo.com/v1/finance/search",
-            params={"q": query, "quotes_count": 10, "news_count": 0},
+            params={
+                "q": query,
+                "quotes_count": 15,
+                "news_count": 0,
+                "lang": "zh-Hans",
+                "region": "HK",
+            },
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=10,
         )
@@ -247,7 +252,7 @@ def resolve_user_input_symbol(user_input: str) -> str:
         return yahoo_hit[0]
 
     if contains_chinese(raw):
-        raise ValueError("未找到匹配的 A 股代码，请改用 6 位代码或美股代码")
+        raise ValueError("未找到匹配的 A 股代码，请改用 6 位代码或美股代码（示例：600519 / TSLA）")
 
     return raw.upper()
 
@@ -640,8 +645,8 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
 
 # ============ 缓存 ============
 @st.cache_data(show_spinner=False)
-def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 13):
-    # version 改成 13，强制刷新缓存
+def get_stock_metrics_cached(symbol: str, cfg_key: str, version: int = 14):
+    # version 改成 14，强制刷新缓存
     return compute_stock_metrics(symbol, cfg_key=cfg_key)
 
 
@@ -669,6 +674,10 @@ if "watchlist" not in st.session_state:
 if st.session_state.get("mode_label") and st.session_state.mode_label not in BACKTEST_CONFIG:
     del st.session_state["mode_label"]
 
+MODE_DEFAULT = "1年"
+if "mode_label" not in st.session_state or st.session_state.get("mode_label") not in BACKTEST_CONFIG:
+    st.session_state["mode_label"] = MODE_DEFAULT
+
 top_c1, top_c2, top_c3, top_c4 = st.columns([2.4, 1.1, 1.1, 1.4])
 
 with top_c1:
@@ -693,9 +702,10 @@ with top_c3:
 with top_c4:
     mode_label = st.selectbox(
         "",
-        list(BACKTEST_CONFIG.keys()),
-        index=list(BACKTEST_CONFIG.keys()).index("1年"),
+        BACKTEST_OPTIONS,
+        index=BACKTEST_OPTIONS.index(MODE_DEFAULT),
         label_visibility="collapsed",
+        key="mode_label",
     )
 
 if add_btn:
