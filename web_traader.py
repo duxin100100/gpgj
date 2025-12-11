@@ -62,19 +62,20 @@ st.markdown(
     .change-down { color:#fb7185; font-size:14px; }
 
     .indicator-grid {
-        display:grid;
-        grid-template-columns:repeat(5,minmax(0,1fr));
-        gap:6px 10px;
+        display:flex;
+        flex-direction:column;
+        gap:8px;
         margin-top:4px;
     }
     .indicator-item {
         display:flex;
         align-items:center;
         justify-content:space-between;
+        width:100%;
         background:#191b27;
         border:1px solid #202233;
         border-radius:10px;
-        padding:6px 8px;
+        padding:8px 10px;
         font-size:12px;
         color:#d4d4d8;
     }
