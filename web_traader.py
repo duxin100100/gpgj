@@ -935,9 +935,9 @@ else:
                 <script>
                   (function() {{
                     const cardId = "{card_id}";
-                    const front = document.getElementById(`${cardId}-front`);
-                    const views = Array.from(document.querySelectorAll(`[data-card-view='${card_id}']`));
-                    const triggers = Array.from(document.querySelectorAll(`[data-card-trigger='${card_id}']`));
+                    const front = document.getElementById(cardId + '-front');
+                    const views = Array.from(document.querySelectorAll("[data-card-view='{card_id}']"));
+                    const triggers = Array.from(document.querySelectorAll("[data-card-trigger='{card_id}']"));
                     const chartData = {chart_json};
                     const chartPool = {{}};
 
@@ -980,7 +980,7 @@ else:
 
                     function renderChart(viewId) {{
                       if (chartPool[viewId]) return;
-                      const ctx = document.getElementById(`${viewId}-canvas`);
+                      const ctx = document.getElementById(viewId + '-canvas');
                       if (!ctx || !chartData || !chartData.labels) return;
 
                       let config;
