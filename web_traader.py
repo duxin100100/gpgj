@@ -28,15 +28,21 @@ st.markdown(
         box-shadow:0 26px 48px rgba(0,0,0,0.6);
     }
 
-    .symbol-line {
+.symbol-line {
         display:flex;
         gap:10px;
         align-items:baseline;
         font-size:20px;
         margin-bottom:2px;
     }
-    .symbol-code {
-        font-weight:800;
+    .symbol-code { font-weight:800; }
+    .symbol-name { font-weight:800; }
+    .symbol-ticker {
+        font-size:13px;
+        color:#9ca3af;
+        padding:2px 6px;
+        border:1px solid #262736;
+        border-radius:10px;
     }
     .symbol-price {
         font-size:20px;
@@ -100,13 +106,73 @@ BACKTEST_CONFIG = {
     "3年":  {"range": "3y",  "interval": "1d", "steps_per_day": 1},
     "5年":  {"range": "5y",  "interval": "1d", "steps_per_day": 1},
     "10年": {"range": "10y", "interval": "1d", "steps_per_day": 1},
-    "3月/4小时": {"range": "3mo", "interval": "4h", "steps_per_day": 6},
-    "6月/4小时": {"range": "6mo", "interval": "4h", "steps_per_day": 6},
-    "3月/1小时": {"range": "3mo", "interval": "1h", "steps_per_day": 24},
-    "6月/1小时": {"range": "6mo", "interval": "1h", "steps_per_day": 24},
 }
 
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}"
+
+
+def format_symbol_for_yahoo(symbol: str) -> str:
+    """Normalize user input to a Yahoo Finance ticker.
+
+    - A股常见 6 位代码会自动根据前缀补全 .SS 或 .SZ 后缀
+    - 其他情况保持用户输入的大写
+    """
+
+    sym = symbol.strip().upper()
+    if not sym:
+        raise ValueError("股票代码不能为空")
+
+    if sym.isdigit() and len(sym) == 6:
+        if sym.startswith(("600", "601", "603", "605", "688")):
+            return f"{sym}.SS"  # 上交所
+        if sym.startswith(("000", "001", "002", "003", "300")):
+            return f"{sym}.SZ"  # 深交所
+
+    return sym
+
+
+@st.cache_data(show_spinner=False)
+def fetch_display_name(symbol: str, yahoo_symbol: str) -> str:
+    """获取用于展示的名称，优先返回 A 股中文名。"""
+
+    clean_sym = symbol.strip()
+
+    # A 股走东财接口拿中文名（SH=1, SZ=0）
+    if clean_sym.isdigit() and len(clean_sym) == 6:
+        market_code = "1" if yahoo_symbol.endswith(".SS") else "0"
+        try:
+            resp = requests.get(
+                "https://push2.eastmoney.com/api/qt/stock/get",
+                params={"secid": f"{market_code}.{clean_sym}", "fields": "f58,f57"},
+                headers={"Referer": "https://quote.eastmoney.com"},
+                timeout=8,
+            )
+            data = resp.json()
+            name = data.get("data", {}).get("f58")
+            if name:
+                return name
+        except Exception:
+            pass
+
+    # 兜底走 Yahoo quote 接口
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            params={"symbols": yahoo_symbol},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        quote = resp.json().get("quoteResponse", {}).get("result", [])
+        if quote:
+            info = quote[0]
+            for key in ("longName", "shortName", "displayName", "symbol"):
+                name = info.get(key)
+                if name:
+                    return name
+    except Exception:
+        pass
+
+    return yahoo_symbol
 
 
 def fetch_yahoo_ohlcv(symbol: str, range_str: str, interval: str):
@@ -317,8 +383,10 @@ def decide_advice(prob: float, pf: float):
 # ============ 计算单只股票（使用上一根完整K线） ============
 def compute_stock_metrics(symbol: str, cfg_key: str):
     cfg = BACKTEST_CONFIG[cfg_key]
+    yahoo_symbol = format_symbol_for_yahoo(symbol)
+    display_name = fetch_display_name(symbol, yahoo_symbol)
     close, high, low, volume = fetch_yahoo_ohlcv(
-        symbol, range_str=cfg["range"], interval=cfg["interval"]
+        yahoo_symbol, range_str=cfg["range"], interval=cfg["interval"]
     )
 
     # 丢掉最后一根「可能还没走完」的K线
@@ -431,7 +499,8 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
     })
 
     return {
-        "symbol": symbol,
+        "symbol": yahoo_symbol,
+        "display_name": display_name,
         "price": float(last_close),
         "change": float(change_pct),
         "prob7": float(prob7),
@@ -467,7 +536,7 @@ with top_c1:
         "",
         value="",
         max_chars=10,
-        placeholder="输入股票代码添加到自选（例：TSLA）",
+        placeholder="输入股票代码添加到自选（例：TSLA 或 600519）",
         label_visibility="collapsed",
     )
 with top_c2:
@@ -575,10 +644,14 @@ else:
                     adv30_label, adv30_intensity, adv30_kind
                 )
 
+                display_name = row.get("display_name", row["symbol"])
+                ticker_label = row["symbol"]
+
                 html = f"""
                 <div class="card">
                   <div class="symbol-line">
-                    <span class="symbol-code">{row['symbol']}</span>
+                    <span class="symbol-name">{display_name}</span>
+                    <span class="symbol-ticker">{ticker_label}</span>
                     <span class="symbol-price">${row['price']:.2f}</span>
                     <span class="{change_class}">{change_str}</span>
                   </div>
