@@ -1,3 +1,6 @@
+import json
+import textwrap
+
 import streamlit as st
 import requests
 import numpy as np
@@ -121,8 +124,32 @@ st.markdown(
     .advice-buy{ color:#4ade80; }
     .advice-hold{ color:#facc15; }
     .advice-sell{ color:#fb7185; }
-    .profit-row { font-size:12px; }
+    .profit-row { font-size:11px; }
+
+    /* 交互层 */
+    .card { position:relative; overflow:hidden; }
+    .card-layer { transition:opacity 0.25s ease; }
+    .layer-hidden { opacity:0; pointer-events:none; position:absolute; inset:12px 16px 12px 16px; }
+    .layer-active { opacity:1; pointer-events:auto; }
+
+    .indicator-item { cursor:pointer; }
+
+    .chart-view { display:flex; flex-direction:column; gap:12px; }
+    .chart-header { display:flex; align-items:center; gap:10px; }
+    .chart-title { font-size:15px; font-weight:700; }
+    .chart-subtitle { font-size:12px; color:#9ca3af; }
+    .chart-body { background:#0d0e14; border:1px solid #1f2030; border-radius:12px; padding:10px; }
+    .back-btn { background:#11121a; border:1px solid #2a2b3c; color:#e5e7eb; border-radius:8px; padding:6px 10px; cursor:pointer; transition:0.15s; }
+    .back-btn:hover { background:#181a24; }
+    canvas { background:transparent; }
     </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     """,
     unsafe_allow_html=True,
 )
@@ -342,12 +369,13 @@ def ema_np(x: np.ndarray, span: int) -> np.ndarray:
     return ema
 
 
-def macd_hist_np(close: np.ndarray) -> np.ndarray:
+def macd_lines(close: np.ndarray):
     ema12 = ema_np(close, 12)
     ema26 = ema_np(close, 26)
     macd_line = ema12 - ema26
     signal = ema_np(macd_line, 9)
-    return macd_line - signal
+    hist = macd_line - signal
+    return macd_line, signal, hist
 
 
 def rsi_np(close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -523,7 +551,7 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
         low = low[:-1]
         volume = volume[:-1]
 
-    macd_hist = macd_hist_np(close)
+    macd_line, macd_signal, macd_hist = macd_lines(close)
     rsi = rsi_np(close)
     atr = atr_np(high, low, close)
     obv = obv_np(close, volume)
@@ -624,6 +652,9 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
         "desc": f"1.05 / {obv_ratio:.2f}"
     })
 
+    window = min(len(close), 180)
+    start = len(close) - window
+
     return {
         "symbol": yahoo_symbol,
         "display_name": display_name,
@@ -640,6 +671,18 @@ def compute_stock_metrics(symbol: str, cfg_key: str):
         "avg_win30": float(avg_win30),
         "avg_loss30": float(avg_loss30),
         "indicators": indicators,
+        "charts": {
+            "labels": list(range(window)),
+            "macd": macd_line[start:].astype(float).tolist(),
+            "macd_signal": macd_signal[start:].astype(float).tolist(),
+            "macd_hist": macd_hist[start:].astype(float).tolist(),
+            "close": close[start:].astype(float).tolist(),
+            "volume": volume[start:].astype(float).tolist(),
+            "vol_ma5": rolling_mean_np(volume, 5)[start:].astype(float).tolist(),
+            "rsi": rsi[start:].astype(float).tolist(),
+            "atr": atr[start:].astype(float).tolist(),
+            "obv": obv[start:].astype(float).tolist(),
+        },
     }
 
 
@@ -671,6 +714,9 @@ default_watchlist = ["QQQ", "AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TS
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = default_watchlist.copy()
 
+if "new_symbol_input" not in st.session_state:
+    st.session_state.new_symbol_input = ""
+
 if st.session_state.get("mode_label") and st.session_state.mode_label not in BACKTEST_CONFIG:
     del st.session_state["mode_label"]
 
@@ -685,7 +731,7 @@ with top_c1:
         "",
         value="",
         max_chars=10,
-        placeholder="输入股票代码（例：TSLA / 600519 ）",
+        placeholder="输入股票代码或中文名（例：TSLA / 600519 / 贵州茅台）",
         label_visibility="collapsed",
         key="new_symbol_input",
         on_change=add_symbol_from_input,
@@ -733,10 +779,13 @@ if not rows:
     st.info("暂无自选股票，请先在上方输入代码添加。")
 else:
     cols_per_row = 4
+    card_counter = 0
     for i in range(0, len(rows), cols_per_row):
         cols = st.columns(cols_per_row)
         for col, row in zip(cols, rows[i:i + cols_per_row]):
             with col:
+                card_id = f"card-{card_counter}"
+                card_counter += 1
                 change_class = "change-up" if row["change"] >= 0 else "change-down"
                 change_str = f"{row['change']:+.2f}%"
 
@@ -755,14 +804,25 @@ else:
                 prob7_class = prob_class(row["prob7"])
                 prob30_class = prob_class(row["prob30"])
 
+                indicator_keys = ["macd", "volume", "rsi", "atr", "obv"]
+                view_titles = {
+                    "macd": ("MACD 三线图", "MACD / DIF / DEA 的趋势示图"),
+                    "volume": ("成交量与均量", "成交量柱状图与 5 日均量线"),
+                    "rsi": ("RSI 强弱线", "相对强弱指标（14）单线"),
+                    "atr": ("ATR 波动率", "真实波幅均值 (14) 趋势"),
+                    "obv": ("OBV 资金趋势", "累积能量线走势"),
+                }
+
                 indicators_html = ""
-                for ind in row["indicators"]:
+                for key, ind in zip(indicator_keys, row["indicators"]):
+                    view_id = f"{card_id}-view-{key}"
                     if ind["desc"]:
                         line = f"{ind['name']} ({ind['desc']})"
                     else:
                         line = ind["name"]
                     indicators_html += (
-                        f"<div class='indicator-item'><span>{line}</span>"
+                        f"<div class='indicator-item' data-card-trigger='{card_id}' data-target='{view_id}'>"
+                        f"<span>{line}</span>"
                         f"<span class='dot dot-{ind['status']}'></span></div>"
                     )
 
@@ -796,58 +856,214 @@ else:
                 display_name = row.get("display_name", row["symbol"])
                 ticker_label = row["symbol"]
 
-                html = f"""
-                <div class="card">
-                  <div class="card-section">
-                    <div class="symbol-line">
-                      <span class="symbol-name">{display_name}</span>
-                      <span class="symbol-ticker">{ticker_label}</span>
-                    </div>
-                    <div class="card-section" style="gap:6px;align-items:center;">
-                      <span class="symbol-price">${row['price']:.2f}</span>
-                      <span class="{change_class}">{change_str}</span>
-                    </div>
-                  </div>
+                chart_sections = []
+                for key in indicator_keys:
+                    title, subtitle = view_titles[key]
+                    view_id = f"{card_id}-view-{key}"
+                    canvas_id = f"{view_id}-canvas"
+                    chart_sections.append(
+                        f"""
+                        <div class=\"card-layer layer-hidden chart-view\" id=\"{view_id}\" data-card-view=\"{card_id}\">
+                          <div class=\"chart-header\">
+                            <button class=\"back-btn\" data-back=\"{card_id}\">← 返回</button>
+                            <div>
+                              <div class=\"chart-title\">{title}</div>
+                              <div class=\"chart-subtitle\">{subtitle}</div>
+                            </div>
+                          </div>
+                          <div class=\"chart-body\">
+                            <canvas id=\"{canvas_id}\" height=\"230\"></canvas>
+                          </div>
+                        </div>
+                        """
+                    )
 
-                  <div class="section-divider"></div>
+                chart_json = json.dumps(row.get("charts", {}))
 
-                  <div class="indicator-grid">
-                    {indicators_html}
-                  </div>
+                html = textwrap.dedent(
+                    f"""
+                    <div class=\"card\" id=\"{card_id}\">
+                      <div class=\"card-layer layer-active\" id=\"{card_id}-front\">
+                        <div class=\"card-section\">
+                          <div class=\"symbol-line\">
+                            <span class=\"symbol-name\">{display_name}</span>
+                            <span class=\"symbol-ticker\">{ticker_label}</span>
+                          </div>
+                          <div class=\"card-section\" style=\"gap:6px;align-items:center;\">
+                            <span class=\"symbol-price\">${row['price']:.2f}</span>
+                            <span class=\"{change_class}\">{change_str}</span>
+                          </div>
+                        </div>
 
-                  <div class="section-divider"></div>
+                        <div class=\"section-divider\"></div>
 
-                  <div>
-                    <div class="profit-row" style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;">
-                      <div>
-                        <span class="label">7日盈利概率</span>
-                        <span class="{prob7_class}"> {prob7_pct:.1f}%</span>
+                        <div class=\"indicator-grid\">
+                          {indicators_html}
+                        </div>
+
+                        <div class=\"section-divider\"></div>
+
+                        <div>
+                          <div class=\"profit-row\" style=\"display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;\">
+                            <div>
+                              <span class=\"label\">7日盈利概率</span>
+                              <span class=\"{prob7_class}\"> {prob7_pct:.1f}%</span>
+                            </div>
+                            <div class=\"label\">均盈 {avg_win7_pct:+.1f}% / 均亏 {avg_loss7_pct:+.1f}% / 盈亏 {pf7:.2f}</div>
+                          </div>
+                          <div class=\"profit-row\" style=\"display:flex;justify-content:space-between;gap:8px;\">
+                            <div>
+                              <span class=\"label\">30日盈利概率</span>
+                              <span class=\"{prob30_class}\"> {prob30_pct:.1f}%</span>
+                            </div>
+                            <div class=\"label\">均盈 {avg_win30_pct:+.1f}% / 均亏 {avg_loss30_pct:+.1f}% / 盈亏 {pf30:.2f}</div>
+                          </div>
+                        </div>
+
+                        <div class=\"section-divider\"></div>
+
+                        <div class=\"score\">
+                          <span class=\"score-label\">7日信号</span>
+                          <span class=\"{adv7_class}\">{adv7_text}</span>
+                          {adv7_dots}
+                        </div>
+                        <div class=\"score\">
+                          <span class=\"score-label\">30日信号</span>
+                          <span class=\"{adv30_class}\">{adv30_text}</span>
+                          {adv30_dots}
+                        </div>
                       </div>
-                      <div class="label">均盈 {avg_win7_pct:+.1f}% / 均亏 {avg_loss7_pct:+.1f}% / 盈亏 {pf7:.2f}</div>
-                    </div>
-                    <div class="profit-row" style="display:flex;justify-content:space-between;gap:8px;">
-                      <div>
-                        <span class="label">30日盈利概率</span>
-                        <span class="{prob30_class}"> {prob30_pct:.1f}%</span>
-                      </div>
-                      <div class="label">均盈 {avg_win30_pct:+.1f}% / 均亏 {avg_loss30_pct:+.1f}% / 盈亏 {pf30:.2f}</div>
-                    </div>
-                  </div>
 
-                  <div class="section-divider"></div>
+                      {''.join(chart_sections)}
+                    </div>
 
-                  <div class="score">
-                    <span class="score-label">7日信号</span>
-                    <span class="{adv7_class}">{adv7_text}</span>
-                    {adv7_dots}
-                  </div>
-                  <div class="score">
-                    <span class="score-label">30日信号</span>
-                    <span class="{adv30_class}">{adv30_text}</span>
-                    {adv30_dots}
-                  </div>
-                </div>
-                """
+                    <script>
+                      (function() {{
+                        const cardId = "{card_id}";
+                        const front = document.getElementById(cardId + '-front');
+                        const views = Array.from(document.querySelectorAll("[data-card-view='{card_id}']"));
+                        const triggers = Array.from(document.querySelectorAll("[data-card-trigger='{card_id}']"));
+                        const chartData = {chart_json};
+                        const chartPool = {{}};
+
+                        function showFront() {{
+                          front.classList.add('layer-active');
+                          front.classList.remove('layer-hidden');
+                          views.forEach(v => {{ v.classList.add('layer-hidden'); v.classList.remove('layer-active'); }});
+                        }}
+
+                        function showView(viewId) {{
+                          front.classList.add('layer-hidden');
+                          front.classList.remove('layer-active');
+                          views.forEach(v => {{
+                            if (v.id === viewId) {{
+                              v.classList.add('layer-active');
+                              v.classList.remove('layer-hidden');
+                            }} else {{
+                              v.classList.add('layer-hidden');
+                              v.classList.remove('layer-active');
+                            }}
+                          }});
+                          renderChart(viewId);
+                        }}
+
+                        function baseLineConfig(labels, datasets) {{
+                          return {{
+                            type: 'line',
+                            data: {{ labels, datasets }},
+                            options: {{
+                              responsive: true,
+                              maintainAspectRatio: false,
+                              plugins: {{ legend: {{ display: true, labels: {{ color: '#d4d4d8' }} }} }},
+                              scales: {{
+                                x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                                y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                              }},
+                            }},
+                          }};
+                        }}
+
+                        function renderChart(viewId) {{
+                          if (chartPool[viewId]) return;
+                          const ctx = document.getElementById(viewId + '-canvas');
+                          if (!ctx || !chartData || !chartData.labels) return;
+
+                          let config;
+                          if (viewId.endsWith('macd')) {{
+                            config = {{
+                              type: 'bar',
+                              data: {{
+                                labels: chartData.labels,
+                                datasets: [
+                                  {{ type: 'line', label: 'MACD', data: chartData.macd, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.15)', borderWidth: 2, tension: 0.25 }},
+                                  {{ type: 'line', label: 'DEA', data: chartData.macd_signal, borderColor: '#c084fc', backgroundColor: 'rgba(192,132,252,0.15)', borderWidth: 2, tension: 0.25 }},
+                                  {{ type: 'bar', label: '柱状', data: chartData.macd_hist, backgroundColor: chartData.macd_hist.map(v => v >= 0 ? 'rgba(74,222,128,0.55)' : 'rgba(251,113,133,0.55)') }},
+                                ],
+                              }},
+                              options: {{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {{ legend: {{ labels: {{ color: '#d4d4d8' }} }} }},
+                                scales: {{
+                                  x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                                  y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }}, zeroLineColor: '#4b5563' }},
+                                }},
+                              }},
+                            }};
+                          }} else if (viewId.endsWith('volume')) {{
+                            config = {{
+                              type: 'bar',
+                              data: {{
+                                labels: chartData.labels,
+                                datasets: [
+                                  {{ label: '成交量', data: chartData.volume, backgroundColor: 'rgba(96,165,250,0.55)', borderWidth: 0 }},
+                                  {{ type: 'line', label: 'MA5', data: chartData.vol_ma5, borderColor: '#facc15', backgroundColor: 'rgba(250,204,21,0.2)', borderWidth: 2, tension: 0.2, yAxisID: 'y' }},
+                                ],
+                              }},
+                              options: {{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {{ legend: {{ labels: {{ color: '#d4d4d8' }} }} }},
+                                scales: {{
+                                  x: {{ stacked: true, ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                                  y: {{ stacked: true, ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                                }},
+                              }},
+                            }};
+                          }} else if (viewId.endsWith('rsi')) {{
+                            config = baseLineConfig(chartData.labels, [
+                              {{ label: 'RSI (14)', data: chartData.rsi, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.1)', borderWidth: 2, tension: 0.2 }},
+                            ]);
+                          }} else if (viewId.endsWith('atr')) {{
+                            config = baseLineConfig(chartData.labels, [
+                              {{ label: 'ATR (14)', data: chartData.atr, borderColor: '#facc15', backgroundColor: 'rgba(250,204,21,0.15)', borderWidth: 2, tension: 0.2 }},
+                            ]);
+                          }} else if (viewId.endsWith('obv')) {{
+                            config = baseLineConfig(chartData.labels, [
+                              {{ label: 'OBV', data: chartData.obv, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.15)', borderWidth: 2, tension: 0.2 }},
+                            ]);
+                          }}
+
+                          if (config) {{
+                            chartPool[viewId] = new Chart(ctx, config);
+                          }}
+                        }}
+
+                        triggers.forEach(el => {{
+                          el.addEventListener('click', () => showView(el.getAttribute('data-target')));
+                        }});
+
+                        views.forEach(v => {{
+                          const backBtn = v.querySelector('[data-back]');
+                          if (backBtn) backBtn.addEventListener('click', showFront);
+                          v.classList.add('layer-hidden');
+                        }});
+
+                        showFront();
+                      }})();
+                    </script>
+                    """
+                )
                 st.markdown(html, unsafe_allow_html=True)
 
 st.caption(
