@@ -2,6 +2,7 @@ import json
 import textwrap
 
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import numpy as np
 
@@ -937,6 +938,7 @@ else:
                       {''.join(chart_sections)}
                     </div>
 
+                    <script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>
                     <script>
                       (function() {{
                         const cardId = "{card_id}";
@@ -1064,7 +1066,7 @@ else:
                     </script>
                     """
                 )
-                st.markdown(html, unsafe_allow_html=True)
+                components.html(html, height=640, scrolling=False)
 
 st.caption(
     "所有指标和回测均基于“上一根完整K线”（日线=昨日收盘，4小时/1小时=上一完整周期），"
